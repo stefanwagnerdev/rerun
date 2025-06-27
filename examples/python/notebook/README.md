@@ -37,15 +37,14 @@ rr.notebook_show()
 This will show the contents of the current global recording stream. Note that the global stream will accumulate
 data in-memory. You can reset the stream by calling `rr.init` again to establish a new global context.
 
-As with the other stream viewing APIs (`rr.show`, `rr.connect`, `rr.spawn`), you can alternatively pass
+As with the other stream viewing APIs (`rr.show`, `rr.connect_grpc`, `rr.spawn`), you can alternatively pass
 a specific recording instance to `notebook_show`
 
 ```python
-rec = rr.new_recording("rerun_example_notebook_local")
+rec = rr.RecordingStream("rerun_example_notebook_local")
 
 rec.log(...)
-
-rr.notebook_show(recording=rec)
+rec.notebook_show()
 ```
 
 ## Running in Jupyter

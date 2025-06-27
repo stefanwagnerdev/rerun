@@ -2,16 +2,16 @@ use re_chunk_store::RowId;
 use re_log_types::TimePoint;
 use re_view_spatial::SpatialView2D;
 use re_viewer_context::test_context::TestContext;
-use re_viewer_context::{RecommendedView, ViewClass, ViewId};
-use re_viewport_blueprint::test_context_ext::TestContextExt;
+use re_viewer_context::{RecommendedView, ViewClass as _, ViewId};
 use re_viewport_blueprint::ViewBlueprint;
+use re_viewport_blueprint::test_context_ext::TestContextExt as _;
 
 #[test]
 pub fn test_draw_order() {
     let mut test_context = get_test_context();
 
     {
-        use ndarray::{s, Array, ShapeBuilder};
+        use ndarray::{Array, ShapeBuilder as _, s};
 
         // Large gray background
         test_context.log_entity("2d_layering/background".into(), |builder| {
@@ -134,7 +134,7 @@ pub fn test_draw_order() {
         });
 
         // 2D arrow sandwitched across
-        test_context.log_entity("2d_layering/arrow2_between".into(), |builder| {
+        test_context.log_entity("2d_layering/arrow2d_between".into(), |builder| {
             builder.with_archetype(
                 RowId::new(),
                 TimePoint::default(),

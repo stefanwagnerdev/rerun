@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -26,11 +25,10 @@ class ImagePlaneDistance(datatypes.Float32, ComponentMixin):
     # You can define your own __init__ function as a member of ImagePlaneDistanceExt in image_plane_distance_ext.py
 
     # Note: there are no fields here because ImagePlaneDistance delegates to datatypes.Float32
-    pass
 
 
 class ImagePlaneDistanceBatch(datatypes.Float32Batch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.ImagePlaneDistance")
+    _COMPONENT_TYPE: str = "rerun.components.ImagePlaneDistance"
 
 
 # This is patched in late to avoid circular dependencies.

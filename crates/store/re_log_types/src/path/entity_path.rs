@@ -6,7 +6,7 @@ use itertools::Itertools as _;
 use re_byte_size::SizeBytes;
 use re_string_interner::InternedString;
 
-use crate::{hash::Hash64, EntityPathPart};
+use crate::{EntityPathPart, hash::Hash64};
 
 // ----------------------------------------------------------------------------
 
@@ -112,6 +112,31 @@ impl EntityPath {
         Self::from(vec![])
     }
 
+    /// The reserved namespace for properties.
+    #[inline]
+    pub fn properties() -> Self {
+        Self::from(vec![EntityPathPart::properties()])
+    }
+
+    /// The reserved namespace for the `RecordingProperties` that are specific to the Rerun viewer.
+    #[inline]
+    pub fn recording_properties() -> Self {
+        Self::from(vec![
+            EntityPathPart::properties(),
+            EntityPathPart::recording(),
+        ])
+    }
+
+    /// Returns `true` if the [`EntityPath`] belongs to a reserved namespace.
+    ///
+    /// Returns `true` iff the root entity starts with `__`.
+    #[inline]
+    pub fn is_reserved(&self) -> bool {
+        self.iter()
+            .next()
+            .is_some_and(|part| part.unescaped_str().starts_with(RESERVED_NAMESPACE_PREFIX))
+    }
+
     #[inline]
     pub fn new(parts: Vec<EntityPathPart>) -> Self {
         Self::from(parts)
@@ -181,6 +206,18 @@ impl EntityPath {
         prefix.len() <= self.len() && self.iter().zip(prefix.iter()).all(|(a, b)| a == b)
     }
 
+    /// If this path starts with the given prefix,
+    /// then return the rest of the path after the prefix.
+    #[inline]
+    pub fn strip_prefix(&self, prefix: &Self) -> Option<Self> {
+        if self.starts_with(prefix) {
+            let remaining_parts = self.parts[prefix.len()..].to_vec();
+            Some(Self::new(remaining_parts))
+        } else {
+            None
+        }
+    }
+
     /// Is this a strict descendant of the given path.
     #[inline]
     pub fn is_descendant_of(&self, other: &Self) -> bool {
@@ -230,9 +267,9 @@ impl EntityPath {
     pub fn incremental_walk<'a>(
         start: Option<&'_ Self>,
         end: &'a Self,
-    ) -> impl Iterator<Item = Self> + 'a {
+    ) -> impl Iterator<Item = Self> + 'a + use<'a> {
         re_tracing::profile_function!();
-        if start.map_or(true, |start| end.is_descendant_of(start)) {
+        if start.is_none_or(|start| end.is_descendant_of(start)) {
             let first_ind = start.map_or(0, |start| start.len() + 1);
             let parts = end.as_slice();
             itertools::Either::Left((first_ind..=end.len()).map(|i| Self::from(&parts[0..i])))
@@ -415,9 +452,50 @@ where
         &self.parts[index]
     }
 }
+
+// ----------------------------------------------------------------------------
+
+impl std::ops::Div<Self> for EntityPath {
+    type Output = Self;
+
+    #[inline]
+    fn div(self, other: Self) -> Self::Output {
+        self.join(&other)
+    }
+}
+
+impl std::ops::Div<Self> for &EntityPath {
+    type Output = EntityPath;
+
+    #[inline]
+    fn div(self, other: Self) -> Self::Output {
+        self.join(other)
+    }
+}
+
+impl std::ops::Div<EntityPathPart> for EntityPath {
+    type Output = Self;
+
+    #[inline]
+    fn div(self, other: EntityPathPart) -> Self::Output {
+        self.join(&Self::new(vec![other]))
+    }
+}
+
+impl std::ops::Div<EntityPathPart> for &EntityPath {
+    type Output = EntityPath;
+
+    #[inline]
+    fn div(self, other: EntityPathPart) -> Self::Output {
+        self.join(&EntityPath::new(vec![other]))
+    }
+}
+
 // ----------------------------------------------------------------------------
 
 use re_types_core::Loggable;
+
+use super::entity_path_part::RESERVED_NAMESPACE_PREFIX;
 
 re_types_core::macros::impl_into_cow!(EntityPath);
 
@@ -549,6 +627,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_root() {
+        assert_eq!(EntityPath::root(), EntityPath::from("/"));
+    }
+
+    #[test]
+    fn test_properties() {
+        let path = EntityPath::properties();
+        assert_eq!(path, EntityPath::from("/__properties"));
+        assert!(path.is_reserved());
+    }
+
+    #[test]
+    fn test_recording_properties() {
+        let path = EntityPath::recording_properties();
+        assert_eq!(path, EntityPath::from("/__properties/recording"),);
+        assert!(path.is_reserved());
+    }
+
+    #[test]
     fn test_incremental_walk() {
         assert_eq!(
             EntityPath::incremental_walk(None, &EntityPath::root()).collect::<Vec<_>>(),
@@ -642,5 +739,15 @@ mod tests {
         // degenerate cases
         run_test(&[("/", "/"), ("/", "/")]);
         run_test(&[("a/b", "a/b"), ("a/b", "a/b")]);
+    }
+
+    #[test]
+    fn test_strip_prefix() {
+        let entity_path = EntityPath::properties() / EntityPathPart::from("episode");
+        assert_eq!(entity_path.to_string(), "/__properties/episode");
+        assert_eq!(
+            entity_path.strip_prefix(&EntityPath::properties()),
+            Some(EntityPath::from("episode"))
+        );
     }
 }

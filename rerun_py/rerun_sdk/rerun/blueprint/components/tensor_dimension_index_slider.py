@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from ..._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 from ...blueprint import datatypes as blueprint_datatypes
@@ -16,19 +15,20 @@ __all__ = ["TensorDimensionIndexSlider", "TensorDimensionIndexSliderBatch"]
 
 
 class TensorDimensionIndexSlider(blueprint_datatypes.TensorDimensionIndexSlider, ComponentMixin):
-    """**Component**: Show a slider for the index of some dimension of a slider."""
+    """
+    **Component**: Show a slider for the index of some dimension of a slider.
+
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    """
 
     _BATCH_TYPE = None
     # You can define your own __init__ function as a member of TensorDimensionIndexSliderExt in tensor_dimension_index_slider_ext.py
 
     # Note: there are no fields here because TensorDimensionIndexSlider delegates to datatypes.TensorDimensionIndexSlider
-    pass
 
 
 class TensorDimensionIndexSliderBatch(blueprint_datatypes.TensorDimensionIndexSliderBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor(
-        "rerun.blueprint.components.TensorDimensionIndexSlider"
-    )
+    _COMPONENT_TYPE: str = "rerun.blueprint.components.TensorDimensionIndexSlider"
 
 
 # This is patched in late to avoid circular dependencies.

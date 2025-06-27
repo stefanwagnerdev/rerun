@@ -3,9 +3,8 @@ use std::sync::Arc;
 use re_chunk::{Chunk, ChunkId, RowId};
 use re_chunk_store::ChunkStore;
 use re_log_types::{
-    build_frame_nr, build_log_time,
-    example_components::{MyColor, MyIndex},
-    EntityPath, Time,
+    EntityPath, Timestamp, build_frame_nr, build_log_time,
+    example_components::{MyColor, MyIndex, MyPoints},
 };
 use re_types_core::ComponentBatch as _;
 
@@ -35,14 +34,17 @@ fn format_chunk_store() -> anyhow::Result<()> {
                 row_id,
                 [
                     build_frame_nr(1),
-                    build_log_time(Time::from_ns_since_epoch(1_736_534_622_123_456_789)),
+                    build_log_time(Timestamp::from_nanos_since_epoch(1_736_534_622_123_456_789)),
                 ],
-                [indices1.try_serialized()?, colors1.try_serialized()?],
+                [
+                    indices1.try_serialized(MyIndex::partial_descriptor())?,
+                    colors1.try_serialized(MyPoints::descriptor_colors())?,
+                ],
             )
             .build()?,
     ))?;
 
-    insta::assert_snapshot!("format_chunk_store", format!("{:200}", store));
+    insta::assert_snapshot!("format_chunk_store", format!("{:240}", store));
 
     Ok(())
 }

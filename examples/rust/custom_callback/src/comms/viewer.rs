@@ -1,17 +1,21 @@
-use rerun::external::re_log;
-use std::collections::VecDeque;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
-use tokio::net::TcpStream;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::sync::{Mutex, Notify};
+use std::{collections::VecDeque, sync::Arc, time::Duration};
+
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
+    net::TcpStream,
+    sync::{
+        Mutex, Notify,
+        mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+    },
+};
+
+use rerun::external::{re_error, re_log};
 
 use super::protocol::Message;
 
 /// A client for handling connections to an external application from within the Rerun viewer.
 ///
-/// This client manages a TCP connection to the external application and provides bidirectional
+/// This client manages a gRPC connection to the external application and provides bidirectional
 /// message communication through separate read and write tasks.
 ///
 /// # Message Handling

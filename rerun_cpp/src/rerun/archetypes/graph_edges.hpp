@@ -54,23 +54,22 @@ namespace rerun::archetypes {
         std::optional<ComponentBatch> graph_type;
 
       public:
-        static constexpr const char IndicatorComponentName[] =
+        static constexpr const char IndicatorComponentType[] =
             "rerun.components.GraphEdgesIndicator";
 
         /// Indicator component, used to identify the archetype when converting to a list of components.
-        using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentName>;
+        using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentType>;
         /// The name of the archetype as used in `ComponentDescriptor`s.
         static constexpr const char ArchetypeName[] = "rerun.archetypes.GraphEdges";
 
         /// `ComponentDescriptor` for the `edges` field.
         static constexpr auto Descriptor_edges = ComponentDescriptor(
-            ArchetypeName, "edges",
-            Loggable<rerun::components::GraphEdge>::Descriptor.component_name
+            ArchetypeName, "GraphEdges:edges", Loggable<rerun::components::GraphEdge>::ComponentType
         );
         /// `ComponentDescriptor` for the `graph_type` field.
         static constexpr auto Descriptor_graph_type = ComponentDescriptor(
-            ArchetypeName, "graph_type",
-            Loggable<rerun::components::GraphType>::Descriptor.component_name
+            ArchetypeName, "GraphEdges:graph_type",
+            Loggable<rerun::components::GraphType>::ComponentType
         );
 
       public:

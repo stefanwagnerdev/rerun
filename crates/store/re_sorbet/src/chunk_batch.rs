@@ -1,6 +1,7 @@
 use arrow::{
     array::{
-        ArrayRef as ArrowArrayRef, AsArray, FixedSizeBinaryArray, RecordBatch as ArrowRecordBatch,
+        ArrayRef as ArrowArrayRef, AsArray as _, FixedSizeBinaryArray,
+        RecordBatch as ArrowRecordBatch,
     },
     datatypes::Fields as ArrowFields,
 };
@@ -56,6 +57,13 @@ impl ChunkBatch {
 
 impl ChunkBatch {
     /// The parsed rerun schema of this chunk.
+    ///
+    /// *IMPORTANT*: the returned `ChunkSchema` has potentially incorrect metadata, since it can
+    /// only be derived from an entire chunk store (e.g. a column is static if _any_ chunk
+    /// containing that column is static).
+    ///
+    /// See `re_chunk_store::ChunkStore::schema` or [`crate::SchemaBuilder`] to compute
+    /// schemas with accurate metadata.
     #[inline]
     pub fn chunk_schema(&self) -> &ChunkSchema {
         &self.schema
@@ -73,6 +81,12 @@ impl ChunkBatch {
         self.schema.entity_path()
     }
 
+    /// Is this chunk static?
+    #[inline]
+    pub fn is_static(&self) -> bool {
+        self.schema.is_static()
+    }
+
     #[inline]
     pub fn fields(&self) -> &ArrowFields {
         &self.schema_ref().fields
@@ -85,6 +99,15 @@ impl ChunkBatch {
             self.schema.row_id_column(),
             self.columns()[0].as_fixed_size_binary(),
         )
+    }
+
+    /// Returns self but with all rows removed.
+    #[must_use]
+    pub fn drop_all_rows(self) -> Self {
+        Self {
+            schema: self.schema.clone(),
+            sorbet_batch: self.sorbet_batch.drop_all_rows(),
+        }
     }
 }
 
@@ -128,7 +151,10 @@ impl From<&ChunkBatch> for ArrowRecordBatch {
 impl TryFrom<&ArrowRecordBatch> for ChunkBatch {
     type Error = SorbetError;
 
-    /// Will automatically wrap data columns in `ListArrays` if they are not already.
+    /// Will perform some transformations:
+    /// * Will automatically wrap data columns in `ListArrays` if they are not already
+    /// * Will reorder columns so that Row ID comes before timelines, which come before data
+    /// * Will migrate component descriptors to colon-based notation
     fn try_from(batch: &ArrowRecordBatch) -> Result<Self, Self::Error> {
         re_tracing::profile_function!();
 
@@ -143,6 +169,7 @@ impl TryFrom<SorbetBatch> for ChunkBatch {
     type Error = SorbetError;
 
     /// Will automatically wrap data columns in `ListArrays` if they are not already.
+    #[tracing::instrument(level = "trace", skip_all)]
     fn try_from(sorbet_batch: SorbetBatch) -> Result<Self, Self::Error> {
         re_tracing::profile_function!();
 

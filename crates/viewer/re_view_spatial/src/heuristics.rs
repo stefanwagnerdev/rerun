@@ -15,6 +15,7 @@ pub fn default_visualized_entities_for_visualizer_kind(
     ctx: &ViewerContext<'_>,
     view_class_identifier: ViewClassIdentifier,
     visualizer_kind: SpatialViewKind,
+    include_entity: &dyn Fn(&EntityPath) -> bool,
 ) -> IntSet<EntityPath> {
     re_tracing::profile_function!();
 
@@ -35,6 +36,7 @@ pub fn default_visualized_entities_for_visualizer_kind(
             }
         })
         .flatten()
+        .filter(|e| include_entity(e))
         .cloned()
         .collect()
 }

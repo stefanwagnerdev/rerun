@@ -33,9 +33,9 @@ This page lists all built-in archetypes.
 ## Plotting
 
 * [`BarChart`](archetypes/bar_chart.md): A bar chart.
-* [`Scalar`](archetypes/scalar.md): A double-precision scalar, e.g. for use for time-series plots.
-* [`SeriesLine`](archetypes/series_line.md): Define the style properties for a line series in a chart.
-* [`SeriesPoint`](archetypes/series_point.md): Define the style properties for a point series in a chart.
+* [`Scalars`](archetypes/scalars.md): One or more double-precision scalar values, e.g. for use for time-series plots.
+* [`SeriesLines`](archetypes/series_lines.md): Define the style properties for one or more line series in a chart.
+* [`SeriesPoints`](archetypes/series_points.md): Define the style properties for one or more point series (scatter plot) in a chart.
 
 ## Spatial 2D
 
@@ -50,6 +50,7 @@ This page lists all built-in archetypes.
 * [`Asset3D`](archetypes/asset3d.md): A prepacked 3D asset (`.gltf`, `.glb`, `.obj`, `.stl`, etc.).
 * [`Boxes3D`](archetypes/boxes3d.md): 3D boxes with half-extents and optional center, rotations, colors etc.
 * [`Capsules3D`](archetypes/capsules3d.md): 3D capsules; cylinders with hemispherical caps.
+* [`Cylinders3D`](archetypes/cylinders3d.md): 3D cylinders with flat caps.
 * [`Ellipsoids3D`](archetypes/ellipsoids3d.md): 3D ellipsoids or spheres.
 * [`InstancePoses3D`](archetypes/instance_poses3d.md): One or more transforms between the current entity and its parent. Unlike [`archetypes.Transform3D`](https://rerun.io/docs/reference/types/archetypes/transform3d), it is *not* propagated in the transform hierarchy.
 * [`LineStrips3D`](archetypes/line_strips3d.md): 3D line strips with positions and optional colors, radii, labels, etc.
@@ -68,9 +69,11 @@ This page lists all built-in archetypes.
 
 * [`AssetVideo`](archetypes/asset_video.md): A video binary.
 * [`VideoFrameReference`](archetypes/video_frame_reference.md): References a single video frame.
+* [`VideoStream`](archetypes/video_stream.md): Video stream consisting of raw video chunks.
 
 ## Other
 
 * [`AnnotationContext`](archetypes/annotation_context.md): The annotation context provides additional information on how to display entities.
 * [`Clear`](archetypes/clear.md): Empties all the components of an entity.
+* [`RecordingProperties`](archetypes/recording_properties.md): A list of properties associated with a recording.
 

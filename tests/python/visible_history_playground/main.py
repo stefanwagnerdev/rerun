@@ -24,26 +24,26 @@ rr.log("3dworld/image/pinhole", rr.Pinhole(focal_length=20, width=100, height=10
 
 date_offset = int(datetime.datetime(year=2023, month=1, day=1).timestamp())
 
-for i in range(0, 100):
-    rr.set_time_seconds("temporal_100day_span", i * 24 * 3600)
-    rr.set_time_seconds("temporal_100s_span", i)
-    rr.set_time_seconds("temporal_100ms_span", i / 1000)
-    rr.set_time_seconds("temporal_100us_span", i / 1000000)
+for i in range(100):
+    rr.set_time("temporal_100day_span", duration=i * 24 * 3600)
+    rr.set_time("temporal_100s_span", duration=i)
+    rr.set_time("temporal_100ms_span", duration=i / 1000)
+    rr.set_time("temporal_100us_span", duration=i / 1000000)
 
-    rr.set_time_seconds("temporal_100day_span_date_offset", date_offset + i * 24 * 3600)
-    rr.set_time_seconds("temporal_100s_span_date_offset", date_offset + i)
-    rr.set_time_seconds("temporal_100ms_span_date_offset", date_offset + i / 1000)
-    rr.set_time_seconds("temporal_100us_span_date_offset", date_offset + i / 1000000)
+    rr.set_time("temporal_100day_span_date_offset", duration=date_offset + i * 24 * 3600)
+    rr.set_time("temporal_100s_span_date_offset", duration=date_offset + i)
+    rr.set_time("temporal_100ms_span_date_offset", duration=date_offset + i / 1000)
+    rr.set_time("temporal_100us_span_date_offset", duration=date_offset + i / 1000000)
 
-    rr.set_time_seconds("temporal_100day_span_zero_centered", (i - 50) * 24 * 3600)
-    rr.set_time_seconds("temporal_100s_zero_centered", i - 50)
-    rr.set_time_seconds("temporal_100ms_zero_centered", (i - 50) / 1000)
-    rr.set_time_seconds("temporal_100us_zero_centered", (i - 50) / 1000000)
+    rr.set_time("temporal_100day_span_zero_centered", duration=(i - 50) * 24 * 3600)
+    rr.set_time("temporal_100s_zero_centered", duration=i - 50)
+    rr.set_time("temporal_100ms_zero_centered", duration=(i - 50) / 1000)
+    rr.set_time("temporal_100us_zero_centered", duration=(i - 50) / 1000000)
 
-    rr.set_time_sequence("sequence", i)
-    rr.set_time_sequence("sequence_zero_centered", (i - 50))
-    rr.set_time_sequence("sequence_10k_offset", 10000 + i)
-    rr.set_time_sequence("sequence_10k_neg_offset", -10000 + i)
+    rr.set_time("sequence", sequence=i)
+    rr.set_time("sequence_zero_centered", sequence=(i - 50))
+    rr.set_time("sequence_10k_offset", sequence=10000 + i)
+    rr.set_time("sequence_10k_neg_offset", sequence=-10000 + i)
 
     rr.log("world/data/nested/point", rr.Points2D([[i, 0], [i, 1]], radii=0.4))
     rr.log("world/data/nested/point2", rr.Points2D([i, 2], radii=0.4))
@@ -58,7 +58,7 @@ for i in range(0, 100):
     rr.log("world/data/nested/transformed/point", rr.Boxes2D(centers=[0, 3], half_sizes=[0.5, 0.5]))
 
     rr.log("text_log", rr.TextLog(f"hello {i}"))
-    rr.log("scalar", rr.Scalar(math.sin(i / 100 * 2 * math.pi)))
+    rr.log("scalar", rr.Scalars(math.sin(i / 100 * 2 * math.pi)))
 
     depth_image = 100 * np.ones((10, 100), dtype=np.float32)
     depth_image[:, i] = 50

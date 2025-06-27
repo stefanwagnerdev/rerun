@@ -44,7 +44,7 @@ class AffixFuzzer4(Archetype):
         fuzz2116: components.AffixFuzzer16ArrayLike | None = None,
         fuzz2117: components.AffixFuzzer17ArrayLike | None = None,
         fuzz2118: components.AffixFuzzer18ArrayLike | None = None,
-    ):
+    ) -> None:
         """Create a new instance of the AffixFuzzer4 archetype."""
 
         # You can define your own __init__ function as a member of AffixFuzzer4Ext in affix_fuzzer4_ext.py
@@ -225,37 +225,45 @@ class AffixFuzzer4(Archetype):
             return ComponentColumnList([])
 
         kwargs = {
-            "fuzz2101": fuzz2101,
-            "fuzz2102": fuzz2102,
-            "fuzz2103": fuzz2103,
-            "fuzz2104": fuzz2104,
-            "fuzz2105": fuzz2105,
-            "fuzz2106": fuzz2106,
-            "fuzz2107": fuzz2107,
-            "fuzz2108": fuzz2108,
-            "fuzz2109": fuzz2109,
-            "fuzz2110": fuzz2110,
-            "fuzz2111": fuzz2111,
-            "fuzz2112": fuzz2112,
-            "fuzz2113": fuzz2113,
-            "fuzz2114": fuzz2114,
-            "fuzz2115": fuzz2115,
-            "fuzz2116": fuzz2116,
-            "fuzz2117": fuzz2117,
-            "fuzz2118": fuzz2118,
+            "AffixFuzzer4:fuzz2101": fuzz2101,
+            "AffixFuzzer4:fuzz2102": fuzz2102,
+            "AffixFuzzer4:fuzz2103": fuzz2103,
+            "AffixFuzzer4:fuzz2104": fuzz2104,
+            "AffixFuzzer4:fuzz2105": fuzz2105,
+            "AffixFuzzer4:fuzz2106": fuzz2106,
+            "AffixFuzzer4:fuzz2107": fuzz2107,
+            "AffixFuzzer4:fuzz2108": fuzz2108,
+            "AffixFuzzer4:fuzz2109": fuzz2109,
+            "AffixFuzzer4:fuzz2110": fuzz2110,
+            "AffixFuzzer4:fuzz2111": fuzz2111,
+            "AffixFuzzer4:fuzz2112": fuzz2112,
+            "AffixFuzzer4:fuzz2113": fuzz2113,
+            "AffixFuzzer4:fuzz2114": fuzz2114,
+            "AffixFuzzer4:fuzz2115": fuzz2115,
+            "AffixFuzzer4:fuzz2116": fuzz2116,
+            "AffixFuzzer4:fuzz2117": fuzz2117,
+            "AffixFuzzer4:fuzz2118": fuzz2118,
         }
         columns = []
 
         for batch in batches:
             arrow_array = batch.as_arrow_array()
 
-            # For primitive arrays, we infer partition size from the input shape.
-            if pa.types.is_primitive(arrow_array.type):
-                param = kwargs[batch.component_descriptor().archetype_field_name]  # type: ignore[index]
+            # For primitive arrays and fixed size list arrays, we infer partition size from the input shape.
+            if pa.types.is_primitive(arrow_array.type) or pa.types.is_fixed_size_list(arrow_array.type):
+                param = kwargs[batch.component_descriptor().component]  # type: ignore[index]
                 shape = np.shape(param)  # type: ignore[arg-type]
+                elem_flat_len = int(np.prod(shape[1:])) if len(shape) > 1 else 1  # type: ignore[redundant-expr,misc]
 
-                batch_length = shape[1] if len(shape) > 1 else 1
-                num_rows = shape[0] if len(shape) >= 1 else 1
+                if pa.types.is_fixed_size_list(arrow_array.type) and arrow_array.type.list_size == elem_flat_len:
+                    # If the product of the last dimensions of the shape are equal to the size of the fixed size list array,
+                    # we have `num_rows` single element batches (each element is a fixed sized list).
+                    # (This should have been already validated by conversion to the arrow_array)
+                    batch_length = 1
+                else:
+                    batch_length = shape[1] if len(shape) > 1 else 1  # type: ignore[redundant-expr,misc]
+
+                num_rows = shape[0] if len(shape) >= 1 else 1  # type: ignore[redundant-expr,misc]
                 sizes = batch_length * np.ones(num_rows)
             else:
                 # For non-primitive types, default to partitioning each element separately.

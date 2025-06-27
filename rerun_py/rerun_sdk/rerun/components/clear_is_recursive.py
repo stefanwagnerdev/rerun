@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 from .clear_is_recursive_ext import ClearIsRecursiveExt
@@ -23,11 +22,10 @@ class ClearIsRecursive(ClearIsRecursiveExt, datatypes.Bool, ComponentMixin):
     # __init__ can be found in clear_is_recursive_ext.py
 
     # Note: there are no fields here because ClearIsRecursive delegates to datatypes.Bool
-    pass
 
 
 class ClearIsRecursiveBatch(datatypes.BoolBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.ClearIsRecursive")
+    _COMPONENT_TYPE: str = "rerun.components.ClearIsRecursive"
 
 
 # This is patched in late to avoid circular dependencies.

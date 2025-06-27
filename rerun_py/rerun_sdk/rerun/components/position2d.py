@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -22,11 +21,10 @@ class Position2D(datatypes.Vec2D, ComponentMixin):
     # You can define your own __init__ function as a member of Position2DExt in position2d_ext.py
 
     # Note: there are no fields here because Position2D delegates to datatypes.Vec2D
-    pass
 
 
 class Position2DBatch(datatypes.Vec2DBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.Position2D")
+    _COMPONENT_TYPE: str = "rerun.components.Position2D"
 
 
 # This is patched in late to avoid circular dependencies.

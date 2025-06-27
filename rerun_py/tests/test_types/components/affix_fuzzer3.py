@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from rerun._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -21,11 +20,10 @@ class AffixFuzzer3(datatypes.AffixFuzzer1, ComponentMixin):
     # You can define your own __init__ function as a member of AffixFuzzer3Ext in affix_fuzzer3_ext.py
 
     # Note: there are no fields here because AffixFuzzer3 delegates to datatypes.AffixFuzzer1
-    pass
 
 
 class AffixFuzzer3Batch(datatypes.AffixFuzzer1Batch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.testing.components.AffixFuzzer3")
+    _COMPONENT_TYPE: str = "rerun.testing.components.AffixFuzzer3"
 
 
 # This is patched in late to avoid circular dependencies.

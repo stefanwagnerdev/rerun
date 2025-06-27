@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Shows how to use the Rerun SDK to log raw 3D meshes (so-called "triangle soups") and their transform hierarchy."""
+"""
+Shows how to use the Rerun SDK to log raw 3D meshes (so-called "triangle soups") and their transform hierarchy.
+
+Note that while this example loads GLTF meshes to illustrate
+[`Mesh3D`](https://rerun.io/docs/reference/types/archetypes/mesh3d)'s abilitites,
+you can also send various kinds of mesh assets directly via
+[`Asset3D`](https://rerun.io/docs/reference/types/archetypes/asset3d).
+"""
 
 from __future__ import annotations
 
@@ -88,7 +95,7 @@ def log_scene(scene: trimesh.Scene, node: str, path: str | None = None) -> None:
                 rr.Mesh3D(
                     vertex_positions=mesh.vertices,
                     vertex_colors=vertex_colors,
-                    vertex_normals=mesh.vertex_normals,  # type: ignore[arg-type]
+                    vertex_normals=mesh.vertex_normals,
                     vertex_texcoords=vertex_texcoords,
                     albedo_texture=albedo_texture,
                     triangle_indices=mesh.faces,
@@ -103,7 +110,7 @@ def log_scene(scene: trimesh.Scene, node: str, path: str | None = None) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Logs raw 3D meshes and their transform hierarchy using the Rerun SDK."
+        description="Logs raw 3D meshes and their transform hierarchy using the Rerun SDK.",
     )
     parser.add_argument(
         "--scene",

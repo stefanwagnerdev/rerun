@@ -5,18 +5,18 @@
 
 use egui::Vec2;
 use egui_kittest::{SnapshotError, SnapshotOptions};
-use itertools::Itertools;
+use itertools::Itertools as _;
 
-use re_blueprint_tree::data::BlueprintTreeData;
 use re_blueprint_tree::BlueprintTree;
-use re_chunk_store::external::re_chunk::ChunkBuilder;
+use re_blueprint_tree::data::BlueprintTreeData;
 use re_chunk_store::RowId;
-use re_log_types::{build_frame_nr, EntityPath, Timeline};
+use re_chunk_store::external::re_chunk::ChunkBuilder;
+use re_log_types::{EntityPath, Timeline, build_frame_nr};
 use re_types::archetypes::Points3D;
 use re_ui::filter_widget::FilterState;
 use re_viewer_context::test_context::TestContext;
-use re_viewer_context::{RecommendedView, ViewClass, ViewId};
-use re_viewport_blueprint::test_context_ext::TestContextExt;
+use re_viewer_context::{RecommendedView, ViewClass as _, ViewId};
+use re_viewport_blueprint::test_context_ext::TestContextExt as _;
 use re_viewport_blueprint::{ViewBlueprint, ViewportBlueprint};
 
 const VIEW_ID: &str = "this-is-a-view-id";
@@ -91,6 +91,7 @@ fn base_test_cases() -> impl Iterator<Item = TestCase> {
 fn filter_queries() -> impl Iterator<Item = Option<&'static str>> {
     [
         None,
+        Some(""),
         Some("t"),
         Some("void"),
         Some("path"),
@@ -128,7 +129,7 @@ fn test_context(test_case: &TestCase) -> TestContext {
                 origin: test_case.origin.clone(),
                 query_filter: test_case
                     .entity_filter
-                    .try_into()
+                    .parse()
                     .expect("invalid entity filter"),
             },
             ViewId::hashed_from_str(VIEW_ID),

@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 from .color_ext import ColorExt
@@ -32,11 +31,10 @@ class Color(ColorExt, datatypes.Rgba32, ComponentMixin):
     # You can define your own __init__ function as a member of ColorExt in color_ext.py
 
     # Note: there are no fields here because Color delegates to datatypes.Rgba32
-    pass
 
 
 class ColorBatch(datatypes.Rgba32Batch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.Color")
+    _COMPONENT_TYPE: str = "rerun.components.Color"
 
 
 # This is patched in late to avoid circular dependencies.

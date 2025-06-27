@@ -9,13 +9,13 @@ use itertools::Itertools as _;
 use re_renderer::Hsva;
 
 use re_renderer::{
+    Color32, LineDrawableBuilder, PointCloudBuilder, Size,
     renderer::{
         ColormappedTexture, LineStripFlags, RectangleDrawData, RectangleOptions, TextureFilterMag,
         TextureFilterMin, TexturedRect,
     },
     resource_managers::{GpuTexture2D, ImageDataDesc},
     view_builder::{self, Projection, TargetConfiguration, ViewBuilder},
-    Color32, LineDrawableBuilder, PointCloudBuilder, Size,
 };
 
 mod framework;
@@ -203,9 +203,8 @@ impl framework::Example for Render2D {
             let y_range = 800.0..880.0;
 
             // Cycle through which line is on top.
-            let top_line = ((time.seconds_since_startup() * 6.0) as i16 % (num_lines * 2 - 1)
-                - num_lines)
-                .abs();
+            let top_line =
+                ((time.secs_since_startup() * 6.0) as i16 % (num_lines * 2 - 1) - num_lines).abs();
             for i in 0..num_lines {
                 let depth_offset = if i < top_line { i } else { top_line * 2 - i };
                 let mut batch = line_strip_builder
@@ -296,7 +295,7 @@ impl framework::Example for Render2D {
                     TargetConfiguration {
                         name: "2D".into(),
                         resolution_in_pixel: splits[0].resolution_in_pixel,
-                        view_from_world: re_math::IsoTransform::IDENTITY,
+                        view_from_world: macaw::IsoTransform::IDENTITY,
                         projection_from_view: Projection::Orthographic {
                             camera_mode:
                                 view_builder::OrthographicCameraMode::TopLeftCornerAndExtendZ,
@@ -321,20 +320,18 @@ impl framework::Example for Render2D {
             },
             // and 3D view of the same scene to the right
             {
-                let seconds_since_startup = time.seconds_since_startup();
+                let secs_since_startup = time.secs_since_startup();
                 let camera_rotation_center = screen_size.extend(0.0) * 0.5;
-                let camera_position = glam::vec3(
-                    seconds_since_startup.sin(),
-                    0.5,
-                    seconds_since_startup.cos(),
-                ) * screen_size.x.max(screen_size.y)
-                    + camera_rotation_center;
+                let camera_position =
+                    glam::vec3(secs_since_startup.sin(), 0.5, secs_since_startup.cos())
+                        * screen_size.x.max(screen_size.y)
+                        + camera_rotation_center;
                 let mut view_builder = ViewBuilder::new(
                     re_ctx,
                     view_builder::TargetConfiguration {
                         name: "3D".into(),
                         resolution_in_pixel: splits[1].resolution_in_pixel,
-                        view_from_world: re_math::IsoTransform::look_at_rh(
+                        view_from_world: macaw::IsoTransform::look_at_rh(
                             camera_position,
                             camera_rotation_center,
                             glam::Vec3::Y,

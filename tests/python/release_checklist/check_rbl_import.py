@@ -45,25 +45,28 @@ def log_external_blueprint() -> None:
 def log_plots() -> None:
     from math import cos, sin, tau
 
-    def lerp(a, b, t):
+    def lerp(a, b, t):  # type: ignore[no-untyped-def]
         return a + t * (b - a)
 
-    for t in range(0, int(tau * 2 * 100.0)):
-        rr.set_time_sequence("frame_nr", t)
+    for t in range(int(tau * 2 * 100.0)):
+        rr.set_time("frame_nr", sequence=t)
 
         sin_of_t = sin(float(t) / 100.0)
         rr.log(
             "trig/sin",
-            rr.Scalar(sin_of_t),
-            rr.SeriesLine(width=5, color=lerp(np.array([1.0, 0, 0]), np.array([1.0, 1.0, 0]), (sin_of_t + 1.0) * 0.5)),
+            rr.Scalars(sin_of_t),
+            rr.SeriesLines(
+                widths=5, colors=lerp(np.array([1.0, 0, 0]), np.array([1.0, 1.0, 0]), (sin_of_t + 1.0) * 0.5)
+            ),
         )
 
         cos_of_t = cos(float(t) / 100.0)
         rr.log(
             "trig/cos",
-            rr.Scalar(cos_of_t),
-            rr.SeriesLine(
-                width=5, color=lerp(np.array([0.0, 1.0, 1.0]), np.array([0.0, 0.0, 1.0]), (cos_of_t + 1.0) * 0.5)
+            rr.Scalars(cos_of_t),
+            rr.SeriesLines(
+                widths=5,
+                colors=lerp(np.array([0.0, 1.0, 1.0]), np.array([0.0, 0.0, 1.0]), (cos_of_t + 1.0) * 0.5),
             ),
         )
 

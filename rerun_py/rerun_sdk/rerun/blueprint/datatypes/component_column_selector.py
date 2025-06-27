@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Sequence, Union
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Union
 
 import pyarrow as pa
 from attrs import define, field
@@ -42,7 +43,11 @@ def _component_column_selector__component__special_field_converter_override(x: d
 
 @define(init=False)
 class ComponentColumnSelector(ComponentColumnSelectorExt):
-    """**Datatype**: Describe a component column to be selected in the dataframe view."""
+    """
+    **Datatype**: Describe a component column to be selected in the dataframe view.
+
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    """
 
     # __init__ can be found in component_column_selector_ext.py
 
@@ -55,6 +60,9 @@ class ComponentColumnSelector(ComponentColumnSelectorExt):
 
     component: datatypes.Utf8 = field(converter=_component_column_selector__component__special_field_converter_override)
     # The name of the component.
+    #
+    # This acts as the component name in the context of a given `entity_path`
+    # An example for this would be `Points3D:positions`, for the `positions` field in the `Points3D` archetype.
     #
     # (Docstring intentionally commented out to hide this field from the docs)
 

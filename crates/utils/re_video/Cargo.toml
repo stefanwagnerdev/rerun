@@ -17,9 +17,7 @@ workspace = true
 
 
 [package.metadata.docs.rs]
-all-features = false
-no-default-features = true
-features = ["all"]
+all-features = true
 
 
 [features]
@@ -35,7 +33,7 @@ av1 = ["dep:dav1d"]
 ffmpeg = ["dep:ffmpeg-sidecar"]
 
 ## Enable faster native video decoding with assembly.
-## You need to install [nasm](https://nasm.us/) to compile with this feature.
+## You need to install [nasm](https://github.com/netwide-assembler/nasm) to compile with this feature.
 nasm = [
   # The default feature set of our dav1d fork has asm enabled
   "dav1d?/default",
@@ -46,10 +44,12 @@ nasm = [
 re_build_info.workspace = true
 re_log.workspace = true
 re_tracing.workspace = true
+re_span.workspace = true
 
 bit-vec.workspace = true
 crossbeam.workspace = true
 econtext.workspace = true
+h264-reader.workspace = true
 itertools.workspace = true
 once_cell.workspace = true
 parking_lot.workspace = true

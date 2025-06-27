@@ -5,12 +5,12 @@ use egui::Vec2;
 use re_chunk_store::{LatestAtQuery, RowId};
 use re_entity_db::InstancePath;
 use re_log_types::{
-    build_frame_nr, example_components::MyPoint, external::re_types_core::Component, EntityPath,
-    TimeInt, TimePoint, TimeType, Timeline,
+    EntityPath, TimeInt, TimePoint, TimeType, Timeline, build_frame_nr,
+    example_components::{MyPoint, MyPoints},
 };
 use re_time_panel::TimePanel;
 use re_types::archetypes::Points2D;
-use re_viewer_context::{blueprint_timeline, test_context::TestContext, CollapseScope, TimeView};
+use re_viewer_context::{CollapseScope, TimeView, blueprint_timeline, test_context::TestContext};
 use re_viewport_blueprint::ViewportBlueprint;
 
 #[test]
@@ -25,7 +25,7 @@ pub fn time_panel_two_sections_should_match_snapshot() {
                 builder = builder.with_sparse_component_batches(
                     RowId::new(),
                     [build_frame_nr(frame)],
-                    [(MyPoint::descriptor(), Some(&points1 as _))],
+                    [(MyPoints::descriptor_points(), Some(&points1 as _))],
                 );
             }
 
@@ -66,7 +66,7 @@ pub fn time_panel_dense_data_should_match_snapshot() {
             builder = builder.with_sparse_component_batches(
                 RowId::new(),
                 [build_frame_nr(frame)],
-                [(MyPoint::descriptor(), Some(&points1 as _))],
+                [(MyPoints::descriptor_points(), Some(&points1 as _))],
             );
         }
 
@@ -110,7 +110,7 @@ pub fn run_time_panel_filter_tests(filter_active: bool, query: &str, snapshot_na
             builder = builder.with_sparse_component_batches(
                 RowId::new(),
                 [build_frame_nr(1)],
-                [(MyPoint::descriptor(), Some(&points1 as _))],
+                [(MyPoints::descriptor_points(), Some(&points1 as _))],
             );
 
             builder
@@ -122,7 +122,7 @@ pub fn run_time_panel_filter_tests(filter_active: bool, query: &str, snapshot_na
             builder = builder.with_sparse_component_batches(
                 RowId::new(),
                 [build_frame_nr(1)],
-                [(MyPoint::descriptor(), Some(&points1 as _))],
+                [(MyPoints::descriptor_points(), Some(&points1 as _))],
             );
 
             builder
@@ -178,6 +178,28 @@ pub fn test_various_entity_kinds_in_time_panel() {
             );
         }
     }
+}
+
+#[test]
+pub fn test_focused_item_is_focused() {
+    TimePanel::ensure_registered_subscribers();
+
+    let mut test_context = TestContext::default();
+
+    log_data_for_various_entity_kinds_tests(&mut test_context);
+
+    *test_context.focused_item.lock() =
+        Some(EntityPath::from("/parent_with_data/of/entity").into());
+
+    let time_panel = TimePanel::default();
+
+    run_time_panel_and_save_snapshot(
+        test_context,
+        time_panel,
+        200.0,
+        false,
+        "focused_item_is_focused",
+    );
 }
 
 pub fn log_data_for_various_entity_kinds_tests(test_context: &mut TestContext) {
@@ -238,7 +260,7 @@ pub fn log_static_data(test_context: &mut TestContext, entity_path: impl Into<En
     test_context.log_entity(entity_path.into(), |builder| {
         builder.with_archetype(
             RowId::new(),
-            TimePoint::from(std::collections::BTreeMap::default()),
+            TimePoint::default(),
             &Points2D::new([[0.0, 0.0]]),
         )
     });

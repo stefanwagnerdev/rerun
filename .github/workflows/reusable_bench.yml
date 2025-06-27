@@ -24,7 +24,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PYTHON_VERSION: "3.8"
+  PYTHON_VERSION: "3.9"
   # web_sys_unstable_apis is required to enable the web_sys clipboard API which egui_web uses
   # https://rustwasm.github.io/wasm-bindgen/api/web_sys/struct.Clipboard.html
   # https://rustwasm.github.io/docs/wasm-bindgen/web-sys/unstable-apis.html
@@ -75,9 +75,9 @@ jobs:
           workload_identity_provider: ${{ secrets.GOOGLE_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
 
-      - uses: prefix-dev/setup-pixi@v0.8.1
+      - uses: prefix-dev/setup-pixi@v0.8.8
         with:
-          pixi-version: v0.39.0
+          pixi-version: v0.41.4
           # default: for the rendering step
           # wheel-test-min: minimal env for roundtrips (less heavy than wheel-test/examples)
           environments: >-
@@ -147,25 +147,6 @@ jobs:
           path: /tmp/${{ inputs.BENCH_NAME }}
           destination: "rerun-builds/benches/"
           process_gcloudignore: false
-
-      - name: Alert on regression
-        # https://github.com/benchmark-action/github-action-benchmark
-        uses: benchmark-action/github-action-benchmark@v1
-        with:
-          name: Rust Benchmark
-          tool: "cargo"
-          output-file-path: /tmp/${{ env.SHORT_SHA }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-          # Show alert with commit comment on detecting possible performance regression
-          comment-on-alert: true
-          alert-threshold: "125%"
-          fail-on-alert: false
-          comment-always: false # Generates too much GitHub notification spam
-
-          # Don't push to gh-pages
-          save-data-file: false
-          auto-push: false
 
       - name: Render benchmark result
         if: github.ref == 'refs/heads/main'

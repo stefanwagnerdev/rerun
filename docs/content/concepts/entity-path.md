@@ -43,7 +43,7 @@ Each "part" of a path must be a non-empty string. Any character is allowed, but 
 Characters that need NOT be escaped are letters, numbers, and underscore, dash, and dot (`_`, `-`, `.`).
 Any other character should be escaped, including symbols (`\:`, `\$`, …) and whitespace (`\ `, `\n`, `\t`, …).
 
-You can an arbitrary unicode code point into an entity path using `\u{262E}`.
+You can insert an arbitrary unicode code point into an entity path using `\u{262E}`.
 
 So for instance, `world/3D/My\ Image.jpg/detection` is a valid path (note the escaped space!).
 
@@ -62,5 +62,6 @@ the relationship between that entity and its direct parent.
 
 ### Reserved paths
 
-The path prefix `rerun/` is considered reserved for use by the Rerun SDK itself and should not be used for logging
-user data. This is where Rerun will log additional information such as warnings.
+The path prefix `__` is considered reserved for use by the Rerun SDK itself and should not be used for logging
+user data. This is where Rerun will log additional information such as properties (`__properties`) and warnings
+(`__warnings`).

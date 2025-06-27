@@ -6,7 +6,6 @@
 mod color;
 mod datatype_uis;
 mod entity_path;
-mod fallback_ui;
 mod geo_line_string;
 mod image_format;
 mod lat_lon;
@@ -20,6 +19,7 @@ mod resolution;
 mod response_utils;
 mod timeline;
 mod transforms;
+mod variant_uis;
 mod video_timestamp;
 mod view_coordinates;
 mod visual_bounds2d;
@@ -29,27 +29,33 @@ use datatype_uis::{
     edit_bool, edit_f32_min_to_max_float, edit_f32_zero_to_max, edit_f32_zero_to_one,
     edit_f64_min_to_max_float, edit_f64_zero_to_max, edit_multiline_string, edit_or_view_vec2d,
     edit_or_view_vec3d, edit_singleline_string, edit_u64_range, edit_ui_points, edit_view_enum,
-    edit_view_enum_with_variant_available, edit_view_range1d, view_uuid, view_view_id,
+    edit_view_enum_with_variant_available, edit_view_range1d, view_timestamp, view_uuid,
+    view_view_id,
 };
 
-use re_types::blueprint::components::{RootContainer, ViewMaximized};
-use re_types::components::SeriesVisible;
 use re_types::{
     blueprint::components::{
         BackgroundKind, Corner2D, Enabled, ForceDistance, ForceIterations, ForceStrength,
-        GridSpacing, LockRangeDuringZoom, MapProvider, NearClipPlane, ViewFit,
+        GridSpacing, LinkAxis, LockRangeDuringZoom, MapProvider, NearClipPlane, RootContainer,
+        ViewFit, ViewMaximized,
     },
     components::{
         AggregationPolicy, AlbedoFactor, AxisLength, Color, DepthMeter, DrawOrder, FillMode,
         FillRatio, GammaCorrection, GraphType, ImagePlaneDistance, MagnificationFilter, MarkerSize,
-        Name, Opacity, Position2D, Range1D, Scale3D, ShowLabels, StrokeWidth, Text,
-        TransformRelation, Translation3D, ValueRange, Visible,
+        Name, Opacity, Position2D, Range1D, Scale3D, SeriesVisible, ShowLabels, StrokeWidth, Text,
+        Timestamp, TransformRelation, Translation3D, ValueRange, VideoCodec, Visible,
     },
 };
 use re_viewer_context::gpu_bridge::colormap_edit_or_view_ui;
 
 /// Default number of ui points to show a number.
 const DEFAULT_NUMBER_WIDTH: f32 = 52.0;
+
+// ---
+
+pub const REDAP_URI_BUTTON_VARIANT: &str = "redap_uri";
+
+pub const REDAP_ENTRY_KIND_VARIANT: &str = "redap_entry_kind";
 
 // ----
 
@@ -60,8 +66,7 @@ const DEFAULT_NUMBER_WIDTH: f32 = 52.0;
 pub fn create_component_ui_registry() -> re_viewer_context::ComponentUiRegistry {
     re_tracing::profile_function!();
 
-    let mut registry =
-        re_viewer_context::ComponentUiRegistry::new(Box::new(&fallback_ui::fallback_component_ui));
+    let mut registry = re_viewer_context::ComponentUiRegistry::new();
 
     // Color components:
     registry.add_singleline_edit_or_view::<Color>(color::edit_rgba32);
@@ -98,6 +103,9 @@ pub fn create_component_ui_registry() -> re_viewer_context::ComponentUiRegistry 
     registry.add_singleline_edit_or_view::<Visible>(edit_bool);
     registry.add_singleline_edit_or_view::<SeriesVisible>(edit_bool);
 
+    // Date components:
+    registry.add_singleline_edit_or_view::<Timestamp>(view_timestamp);
+
     // Text components:
     registry.add_singleline_edit_or_view::<Text>(edit_singleline_string);
     registry.add_multiline_edit_or_view::<Text>(edit_multiline_string);
@@ -111,6 +119,7 @@ pub fn create_component_ui_registry() -> re_viewer_context::ComponentUiRegistry 
     registry.add_singleline_edit_or_view::<Corner2D>(edit_view_enum);
     registry.add_singleline_edit_or_view::<FillMode>(edit_view_enum);
     registry.add_singleline_edit_or_view::<GraphType>(edit_view_enum);
+    registry.add_singleline_edit_or_view::<LinkAxis>(edit_view_enum);
     registry.add_singleline_edit_or_view::<MapProvider>(
         edit_view_enum_with_variant_available::<
             MapProvider,
@@ -119,6 +128,17 @@ pub fn create_component_ui_registry() -> re_viewer_context::ComponentUiRegistry 
     );
     registry.add_singleline_edit_or_view::<MagnificationFilter>(edit_view_enum);
     registry.add_singleline_edit_or_view::<TransformRelation>(edit_view_enum);
+    registry.add_singleline_edit_or_view::<VideoCodec>(|ctx, ui, value| {
+        // Hack to make this field never editable.
+        // Editing the codec rarely makes sense and isn't supported by the visualizer.
+        // (to change this we'd have to do a blueprint query, but `VideoStreamCache` needs more context for that
+        // and the result is almost certainly just decoding failure)
+        edit_view_enum(
+            ctx,
+            ui,
+            &mut re_viewer_context::MaybeMutRef::Ref(value.as_ref()),
+        )
+    });
     registry.add_singleline_edit_or_view::<ViewFit>(edit_view_enum);
 
     // Vec2 components:
@@ -175,6 +195,13 @@ pub fn create_component_ui_registry() -> re_viewer_context::ComponentUiRegistry 
 
     registry.add_singleline_edit_or_view(plane3d::edit_or_view_plane3d);
     registry.add_multiline_edit_or_view(plane3d::multiline_edit_or_view_plane3d);
+
+    // --------------------------------------------------------------------------------
+    // All variant UIs:
+    // --------------------------------------------------------------------------------
+
+    registry.add_variant_ui(REDAP_URI_BUTTON_VARIANT, variant_uis::redap_uri_button);
+    registry.add_variant_ui(REDAP_ENTRY_KIND_VARIANT, variant_uis::redap_entry_kind);
 
     registry
 }

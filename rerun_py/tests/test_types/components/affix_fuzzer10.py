@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Sequence, Union
+from collections.abc import Sequence
+from typing import Any, Union
 
 import numpy as np
 import numpy.typing as npt
@@ -14,7 +15,6 @@ from attrs import define, field
 from rerun._baseclasses import (
     BaseBatch,
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 from rerun._converters import (
@@ -28,7 +28,7 @@ __all__ = ["AffixFuzzer10", "AffixFuzzer10ArrayLike", "AffixFuzzer10Batch", "Aff
 class AffixFuzzer10(ComponentMixin):
     _BATCH_TYPE = None
 
-    def __init__(self: Any, single_string_optional: str | None = None):
+    def __init__(self: Any, single_string_optional: str | None = None) -> None:
         """Create a new instance of the AffixFuzzer10 component."""
 
         # You can define your own __init__ function as a member of AffixFuzzer10Ext in affix_fuzzer10_ext.py
@@ -46,12 +46,12 @@ AffixFuzzer10ArrayLike = Union[
 
 class AffixFuzzer10Batch(BaseBatch[AffixFuzzer10ArrayLike], ComponentBatchMixin):
     _ARROW_DATATYPE = pa.utf8()
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.testing.components.AffixFuzzer10")
+    _COMPONENT_TYPE: str = "rerun.testing.components.AffixFuzzer10"
 
     @staticmethod
     def _native_to_pa_array(data: AffixFuzzer10ArrayLike, data_type: pa.DataType) -> pa.Array:
         if isinstance(data, str):
-            array: Union[list[str], npt.ArrayLike] = [data]
+            array: list[str] | npt.ArrayLike = [data]
         elif isinstance(data, Sequence):
             array = [str(datum) for datum in data]
         elif isinstance(data, np.ndarray):

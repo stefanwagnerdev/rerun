@@ -79,7 +79,7 @@ def log_nyud_data(recording_path: Path, subset_idx: int, frames: int) -> None:
             files_with_timestamps = files_with_timestamps[:frames]
 
         for time, f in files_with_timestamps:
-            rr.set_time_seconds("time", time.timestamp())
+            rr.set_time("time", timestamp=time.timestamp())
 
             if f.filename.endswith(".ppm"):
                 buf = archive.read(f)
@@ -141,13 +141,16 @@ def download_progress(url: str, dst: Path) -> None:
     total = int(resp.headers.get("content-length", 0))
     chunk_size = 1024 * 1024
     # Can also replace 'file' with a io.BytesIO object
-    with open(dst, "wb") as file, tqdm(
-        desc=dst.name,
-        total=total,
-        unit="iB",
-        unit_scale=True,
-        unit_divisor=1024,
-    ) as bar:
+    with (
+        open(dst, "wb") as file,
+        tqdm(
+            desc=dst.name,
+            total=total,
+            unit="iB",
+            unit_scale=True,
+            unit_divisor=1024,
+        ) as bar,
+    ):
         for data in resp.iter_content(chunk_size=chunk_size):
             size = file.write(data)
             bar.update(size)
@@ -164,7 +167,10 @@ def main() -> None:
     )
     parser.add_argument("--subset-idx", type=int, default=0, help="The index of the subset of the recording to use.")
     parser.add_argument(
-        "--frames", type=int, default=sys.maxsize, help="If specified, limits the number of frames logged"
+        "--frames",
+        type=int,
+        default=sys.maxsize,
+        help="If specified, limits the number of frames logged",
     )
     rr.script_add_args(parser)
     args = parser.parse_args()
@@ -184,7 +190,7 @@ def main() -> None:
                 rrb.Spatial2DView(
                     name="RGB & Depth",
                     origin="world/camera/image",
-                    overrides={"world/camera/image/rgb": [rr.components.Opacity(0.5)]},
+                    overrides={"world/camera/image/rgb": rr.Image.from_fields(opacity=0.5)},
                 ),
                 rrb.Tabs(
                     rrb.Spatial2DView(name="RGB", origin="world/camera/image", contents="world/camera/image/rgb"),

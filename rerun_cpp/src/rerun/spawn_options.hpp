@@ -26,10 +26,23 @@ namespace rerun {
         /// Defaults to `75%` if unset.
         std::string_view memory_limit = "75%";
 
+        /// An upper limit on how much memory the gRPC server running
+        /// in the same process as the Rerun Viewer should use.
+        /// When this limit is reached, Rerun will drop the oldest data.
+        /// Example: `16GB` or `50%` (of system total).
+        ///
+        /// Defaults to `0B`.
+        std::string_view server_memory_limit = "0B";
+
         /// Hide the normal Rerun welcome screen.
         ///
         /// Defaults to `false` if unset.
         bool hide_welcome_screen = false;
+
+        /// Detach Rerun Viewer process from the application process.
+        ///
+        /// Defaults to `true` if unset.
+        bool detach_process = true;
 
         /// Specifies the name of the Rerun executable.
         ///

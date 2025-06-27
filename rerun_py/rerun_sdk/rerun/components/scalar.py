@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -26,11 +25,10 @@ class Scalar(datatypes.Float64, ComponentMixin):
     # You can define your own __init__ function as a member of ScalarExt in scalar_ext.py
 
     # Note: there are no fields here because Scalar delegates to datatypes.Float64
-    pass
 
 
 class ScalarBatch(datatypes.Float64Batch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.Scalar")
+    _COMPONENT_TYPE: str = "rerun.components.Scalar"
 
 
 # This is patched in late to avoid circular dependencies.

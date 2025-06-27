@@ -1,6 +1,7 @@
 use egui::{CursorIcon, Id, NumExt as _, Rect};
 
 use re_log_types::{Duration, ResolvedTimeRangeF, TimeInt, TimeReal, TimeType};
+use re_ui::UiExt as _;
 use re_viewer_context::{Looping, TimeControl};
 
 use super::time_ranges_ui::TimeRangesUi;
@@ -12,6 +13,8 @@ pub fn loop_selection_ui(
     time_area_painter: &egui::Painter,
     timeline_rect: &Rect,
 ) {
+    let tokens = ui.tokens();
+
     if time_ctrl.loop_selection().is_none() && time_ctrl.looping() == Looping::Selection {
         // Helpfully select a time slice
         if let Some(selection) = initial_time_selection(time_ranges_ui, time_ctrl.time_type()) {
@@ -26,9 +29,9 @@ pub fn loop_selection_ui(
     let is_active = time_ctrl.looping() == Looping::Selection;
 
     let selection_color = if is_active {
-        re_ui::DesignTokens::loop_selection_color().gamma_multiply(0.7)
+        tokens.loop_selection_color
     } else {
-        re_ui::DesignTokens::loop_selection_color().gamma_multiply(0.5)
+        tokens.loop_selection_color.gamma_multiply(0.7)
     };
 
     let pointer_pos = ui.input(|i| i.pointer.hover_pos());
@@ -63,10 +66,10 @@ pub fn loop_selection_ui(
 
             if is_active {
                 let full_rect = Rect::from_x_y_ranges(rect.x_range(), full_y_range);
-                let rounding = re_ui::DesignTokens::normal_corner_radius();
+                let rounding = tokens.normal_corner_radius();
                 time_area_painter.rect_filled(full_rect, rounding, selection_color);
             } else {
-                let rounding = re_ui::DesignTokens::normal_corner_radius();
+                let rounding = tokens.normal_corner_radius();
                 time_area_painter.rect_filled(rect, rounding, selection_color);
             }
 
@@ -164,7 +167,7 @@ fn initial_time_selection(
             let range = &segment.tight_time;
             if range.min() < range.max() {
                 match time_type {
-                    TimeType::Time => {
+                    TimeType::DurationNs | TimeType::TimestampNs => {
                         let seconds = Duration::from(range.max() - range.min()).as_secs_f64();
                         if seconds > min_duration {
                             let one_sec =
@@ -350,7 +353,7 @@ fn paint_range_text(
 /// Human-readable description of a duration
 fn format_duration(time_typ: TimeType, duration: TimeReal) -> String {
     match time_typ {
-        TimeType::Time => Duration::from(duration).to_string(),
+        TimeType::DurationNs | TimeType::TimestampNs => Duration::from(duration).to_string(),
         TimeType::Sequence => duration.round().as_i64().to_string(), // TODO(emilk): show real part?
     }
 }

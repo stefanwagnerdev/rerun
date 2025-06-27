@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -58,11 +57,10 @@ class PoseTransformMat3x3(datatypes.Mat3x3, ComponentMixin):
     # You can define your own __init__ function as a member of PoseTransformMat3x3Ext in pose_transform_mat3x3_ext.py
 
     # Note: there are no fields here because PoseTransformMat3x3 delegates to datatypes.Mat3x3
-    pass
 
 
 class PoseTransformMat3x3Batch(datatypes.Mat3x3Batch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.PoseTransformMat3x3")
+    _COMPONENT_TYPE: str = "rerun.components.PoseTransformMat3x3"
 
 
 # This is patched in late to avoid circular dependencies.

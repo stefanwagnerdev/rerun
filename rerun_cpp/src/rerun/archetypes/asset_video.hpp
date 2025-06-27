@@ -58,10 +58,10 @@ namespace rerun::archetypes {
     ///
     ///     // Send automatically determined video frame timestamps.
     ///     std::vector<std::chrono::nanoseconds> frame_timestamps_ns =
-    ///         video_asset.read_frame_timestamps_ns().value_or_throw();
+    ///         video_asset.read_frame_timestamps_nanos().value_or_throw();
     ///     // Note timeline values don't have to be the same as the video timestamps.
     ///     auto time_column =
-    ///         rerun::TimeColumn::from_times("video_time", rerun::borrow(frame_timestamps_ns));
+    ///         rerun::TimeColumn::from_durations("video_time", rerun::borrow(frame_timestamps_ns));
     ///
     ///     std::vector<rerun::components::VideoTimestamp> video_timestamps(frame_timestamps_ns.size());
     ///     for (size_t i = 0; i <frame_timestamps_ns.size(); i++) {
@@ -126,22 +126,22 @@ namespace rerun::archetypes {
         std::optional<ComponentBatch> media_type;
 
       public:
-        static constexpr const char IndicatorComponentName[] =
+        static constexpr const char IndicatorComponentType[] =
             "rerun.components.AssetVideoIndicator";
 
         /// Indicator component, used to identify the archetype when converting to a list of components.
-        using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentName>;
+        using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentType>;
         /// The name of the archetype as used in `ComponentDescriptor`s.
         static constexpr const char ArchetypeName[] = "rerun.archetypes.AssetVideo";
 
         /// `ComponentDescriptor` for the `blob` field.
         static constexpr auto Descriptor_blob = ComponentDescriptor(
-            ArchetypeName, "blob", Loggable<rerun::components::Blob>::Descriptor.component_name
+            ArchetypeName, "AssetVideo:blob", Loggable<rerun::components::Blob>::ComponentType
         );
         /// `ComponentDescriptor` for the `media_type` field.
         static constexpr auto Descriptor_media_type = ComponentDescriptor(
-            ArchetypeName, "media_type",
-            Loggable<rerun::components::MediaType>::Descriptor.component_name
+            ArchetypeName, "AssetVideo:media_type",
+            Loggable<rerun::components::MediaType>::ComponentType
         );
 
       public: // START of extensions from asset_video_ext.cpp:
@@ -172,7 +172,14 @@ namespace rerun::archetypes {
         /// Determines the presentation timestamps of all frames inside the video.
         ///
         /// Returned timestamps are in nanoseconds since start and are guaranteed to be monotonically increasing.
-        Result<std::vector<std::chrono::nanoseconds>> read_frame_timestamps_ns() const;
+        Result<std::vector<std::chrono::nanoseconds>> read_frame_timestamps_nanos() const;
+
+        /// DEPRECATED: Use `read_frame_timestamps_nanos` instead.
+        [[deprecated("Renamed to `read_frame_timestamps_nanos`"
+        )]] Result<std::vector<std::chrono::nanoseconds>>
+            read_frame_timestamps_ns() const {
+            return read_frame_timestamps_nanos();
+        }
 
         // END of extensions from asset_video_ext.cpp, start of generated code:
 

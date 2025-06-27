@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Sequence, Union
+from collections.abc import Sequence
+from typing import Any, Union
 
 import pyarrow as pa
 from attrs import define, field
@@ -21,9 +22,13 @@ __all__ = ["FilterByRange", "FilterByRangeArrayLike", "FilterByRangeBatch", "Fil
 
 @define(init=False)
 class FilterByRange(FilterByRangeExt):
-    """**Datatype**: Configuration for the filter-by-range feature of the dataframe view."""
+    """
+    **Datatype**: Configuration for the filter-by-range feature of the dataframe view.
 
-    def __init__(self: Any, start: datatypes.TimeIntLike, end: datatypes.TimeIntLike):
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    """
+
+    def __init__(self: Any, start: datatypes.TimeIntLike, end: datatypes.TimeIntLike) -> None:
         """
         Create a new instance of the FilterByRange datatype.
 

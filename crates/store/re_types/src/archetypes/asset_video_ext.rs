@@ -45,8 +45,8 @@ impl AssetVideo {
     ///
     /// Panics if the serialized blob data doesn't have the right datatype.
     #[cfg(feature = "video")]
-    pub fn read_frame_timestamps_ns(&self) -> Result<Vec<i64>, re_video::VideoLoadError> {
-        use re_types_core::Loggable;
+    pub fn read_frame_timestamps_nanos(&self) -> Result<Vec<i64>, re_video::VideoLoadError> {
+        use re_types_core::Loggable as _;
 
         re_tracing::profile_function!();
 
@@ -76,10 +76,20 @@ impl AssetVideo {
             return Err(re_video::VideoLoadError::UnrecognizedMimeType);
         };
 
-        Ok(
-            re_video::VideoData::load_from_bytes(blob_bytes, media_type.as_str())?
-                .frame_timestamps_ns()
-                .collect(),
-        )
+        Ok(re_video::VideoDataDescription::load_from_bytes(
+            blob_bytes,
+            media_type.as_str(),
+            "AssetVideo",
+        )?
+        .frame_timestamps_nanos()
+        .ok_or(re_video::VideoLoadError::NoTimescale)?
+        .collect())
+    }
+
+    /// DEPRECATED: renamed to `read_frame_timestamps_nanos`
+    #[deprecated(since = "0.23.0", note = "Renamed to `read_frame_timestamps_nanos`")]
+    #[cfg(feature = "video")]
+    pub fn read_frame_timestamps_ns(&self) -> Result<Vec<i64>, re_video::VideoLoadError> {
+        self.read_frame_timestamps_nanos()
     }
 }

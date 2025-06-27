@@ -4,6 +4,7 @@
 #include "c/rerun.h"
 
 #include <arrow/array/array_base.h>
+#include <arrow/array/util.h>
 #include <arrow/buffer.h>
 #include <arrow/c/bridge.h>
 
@@ -20,31 +21,21 @@ namespace rerun {
         // which may or may not be another copy (if the collection already owns the data this is just a move).
         auto length = static_cast<int64_t>(times.size());
         auto buffer = arrow_buffer_from_vector(std::move(times).to_vector());
-        array = std::make_shared<arrow::PrimitiveArray>(datatype, length, buffer);
-    }
-
-    TimeColumn TimeColumn::from_nanoseconds(
-        std::string timeline_name, Collection<int64_t> times_in_nanoseconds,
-        SortingStatus sorting_status
-    ) {
-        return TimeColumn(
-            Timeline(std::move(timeline_name), TimeType::Time),
-            std::move(times_in_nanoseconds),
-            sorting_status
-        );
+        auto buffers = std::vector<std::shared_ptr<arrow::Buffer>>{nullptr, buffer};
+        auto array_data = std::make_shared<arrow::ArrayData>(datatype, length, std::move(buffers));
+        array = arrow::MakeArray(array_data);
     }
 
     TimeColumn TimeColumn::from_seconds(
-        std::string timeline_name, Collection<double> times_in_seconds, SortingStatus sorting_status
+        std::string timeline_name, Collection<double> times_in_secs, SortingStatus sorting_status
     ) {
         std::vector<int64_t> times_in_nanoseconds;
-        times_in_nanoseconds.reserve(times_in_seconds.size());
-        for (auto time_in_seconds : times_in_seconds) {
-            times_in_nanoseconds.push_back(static_cast<int64_t>(time_in_seconds * 1.0e9 + 0.5));
+        times_in_nanoseconds.reserve(times_in_secs.size());
+        for (auto time_in_secs : times_in_secs) {
+            times_in_nanoseconds.push_back(static_cast<int64_t>(time_in_secs * 1.0e9 + 0.5));
         }
-
         return TimeColumn(
-            Timeline(std::move(timeline_name), TimeType::Time),
+            Timeline(std::move(timeline_name), TimeType::Duration),
             std::move(times_in_nanoseconds),
             sorting_status
         );

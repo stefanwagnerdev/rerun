@@ -104,13 +104,15 @@ class Boxes2D(Boxes2DExt, Archetype):
             If there's a single label present, it will be placed at the center of the entity.
             Otherwise, each instance will have its own label.
         show_labels:
-            Optional choice of whether the text labels should be shown by default.
+            Whether the text labels should be shown.
+
+            If not set, labels will automatically appear when there is exactly one label for this entity
+            or the number of instances on this entity is under a certain threshold.
         draw_order:
             An optional floating point value that specifies the 2D drawing order.
 
             Objects with higher values are drawn on top of those with lower values.
-
-            The default for 2D boxes is 10.0.
+            Defaults to `10.0`.
         class_ids:
             Optional [`components.ClassId`][rerun.components.ClassId]s for the boxes.
 
@@ -182,13 +184,15 @@ class Boxes2D(Boxes2DExt, Archetype):
             If there's a single label present, it will be placed at the center of the entity.
             Otherwise, each instance will have its own label.
         show_labels:
-            Optional choice of whether the text labels should be shown by default.
+            Whether the text labels should be shown.
+
+            If not set, labels will automatically appear when there is exactly one label for this entity
+            or the number of instances on this entity is under a certain threshold.
         draw_order:
             An optional floating point value that specifies the 2D drawing order.
 
             Objects with higher values are drawn on top of those with lower values.
-
-            The default for 2D boxes is 10.0.
+            Defaults to `10.0`.
         class_ids:
             Optional [`components.ClassId`][rerun.components.ClassId]s for the boxes.
 
@@ -214,27 +218,35 @@ class Boxes2D(Boxes2DExt, Archetype):
             return ComponentColumnList([])
 
         kwargs = {
-            "half_sizes": half_sizes,
-            "centers": centers,
-            "colors": colors,
-            "radii": radii,
-            "labels": labels,
-            "show_labels": show_labels,
-            "draw_order": draw_order,
-            "class_ids": class_ids,
+            "Boxes2D:half_sizes": half_sizes,
+            "Boxes2D:centers": centers,
+            "Boxes2D:colors": colors,
+            "Boxes2D:radii": radii,
+            "Boxes2D:labels": labels,
+            "Boxes2D:show_labels": show_labels,
+            "Boxes2D:draw_order": draw_order,
+            "Boxes2D:class_ids": class_ids,
         }
         columns = []
 
         for batch in batches:
             arrow_array = batch.as_arrow_array()
 
-            # For primitive arrays, we infer partition size from the input shape.
-            if pa.types.is_primitive(arrow_array.type):
-                param = kwargs[batch.component_descriptor().archetype_field_name]  # type: ignore[index]
+            # For primitive arrays and fixed size list arrays, we infer partition size from the input shape.
+            if pa.types.is_primitive(arrow_array.type) or pa.types.is_fixed_size_list(arrow_array.type):
+                param = kwargs[batch.component_descriptor().component]  # type: ignore[index]
                 shape = np.shape(param)  # type: ignore[arg-type]
+                elem_flat_len = int(np.prod(shape[1:])) if len(shape) > 1 else 1  # type: ignore[redundant-expr,misc]
 
-                batch_length = shape[1] if len(shape) > 1 else 1
-                num_rows = shape[0] if len(shape) >= 1 else 1
+                if pa.types.is_fixed_size_list(arrow_array.type) and arrow_array.type.list_size == elem_flat_len:
+                    # If the product of the last dimensions of the shape are equal to the size of the fixed size list array,
+                    # we have `num_rows` single element batches (each element is a fixed sized list).
+                    # (This should have been already validated by conversion to the arrow_array)
+                    batch_length = 1
+                else:
+                    batch_length = shape[1] if len(shape) > 1 else 1  # type: ignore[redundant-expr,misc]
+
+                num_rows = shape[0] if len(shape) >= 1 else 1  # type: ignore[redundant-expr,misc]
                 sizes = batch_length * np.ones(num_rows)
             else:
                 # For non-primitive types, default to partitioning each element separately.
@@ -298,7 +310,10 @@ class Boxes2D(Boxes2DExt, Archetype):
         default=None,
         converter=components.ShowLabelsBatch._converter,  # type: ignore[misc]
     )
-    # Optional choice of whether the text labels should be shown by default.
+    # Whether the text labels should be shown.
+    #
+    # If not set, labels will automatically appear when there is exactly one label for this entity
+    # or the number of instances on this entity is under a certain threshold.
     #
     # (Docstring intentionally commented out to hide this field from the docs)
 
@@ -310,8 +325,7 @@ class Boxes2D(Boxes2DExt, Archetype):
     # An optional floating point value that specifies the 2D drawing order.
     #
     # Objects with higher values are drawn on top of those with lower values.
-    #
-    # The default for 2D boxes is 10.0.
+    # Defaults to `10.0`.
     #
     # (Docstring intentionally commented out to hide this field from the docs)
 

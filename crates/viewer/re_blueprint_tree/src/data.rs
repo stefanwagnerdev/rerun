@@ -10,13 +10,12 @@
 
 use std::ops::{ControlFlow, Range};
 
-use itertools::Itertools;
+use itertools::Itertools as _;
 use smallvec::SmallVec;
 
 use re_entity_db::InstancePath;
-use re_log_types::external::re_types_core::ViewClassIdentifier;
 use re_log_types::EntityPath;
-use re_types::components::Visible;
+use re_log_types::external::re_types_core::ViewClassIdentifier;
 use re_ui::filter_widget::{FilterMatcher, PathRanges};
 use re_viewer_context::{
     CollapseScope, ContainerId, Contents, ContentsName, DataQueryResult, DataResultNode, Item,
@@ -220,7 +219,6 @@ impl ViewData {
         let mut hierarchy = Vec::with_capacity(10);
         let mut hierarchy_highlights = PathRanges::default();
         let origin_tree = DataResultData::from_data_result_and_filter(
-            ctx,
             view_blueprint,
             query_result,
             &DataResultNodeOrPath::from_path_lookup(result_tree, &view_blueprint.space_origin),
@@ -264,7 +262,6 @@ impl ViewData {
             .into_iter()
             .filter_map(|node| {
                 let projection_tree = DataResultData::from_data_result_and_filter(
-                    ctx,
                     view_blueprint,
                     query_result,
                     &DataResultNodeOrPath::DataResultNode(node),
@@ -287,7 +284,7 @@ impl ViewData {
         }
 
         let default_open = filter_matcher.is_active()
-            || origin_tree.as_ref().map_or(true, |data_result_data| {
+            || origin_tree.as_ref().is_none_or(|data_result_data| {
                 default_open_for_data_result(data_result_data.children.len())
             });
 
@@ -366,9 +363,7 @@ pub struct DataResultData {
 }
 
 impl DataResultData {
-    #[allow(clippy::too_many_arguments)]
     fn from_data_result_and_filter(
-        ctx: &ViewerContext<'_>,
         view_blueprint: &ViewBlueprint,
         query_result: &DataQueryResult,
         data_result_or_path: &DataResultNodeOrPath<'_>,
@@ -379,14 +374,9 @@ impl DataResultData {
     ) -> Option<Self> {
         re_tracing::profile_function!();
 
-        // Early out.
-        if filter_matcher.matches_nothing() {
-            return None;
-        }
-
         let entity_path = data_result_or_path.path().clone();
         let data_result_node = data_result_or_path.data_result_node();
-        let visible = data_result_node.is_some_and(|node| node.data_result.is_visible(ctx));
+        let visible = data_result_node.is_some_and(|node| node.data_result.is_visible());
 
         let entity_part_ui_string = entity_path
             .last()
@@ -504,7 +494,6 @@ impl DataResultData {
 
                             child_node.and_then(|child_node| {
                                 Self::from_data_result_and_filter(
-                                    ctx,
                                     view_blueprint,
                                     query_result,
                                     &DataResultNodeOrPath::DataResultNode(child_node),
@@ -588,11 +577,7 @@ impl DataResultData {
         let query_result = ctx.lookup_query_result(self.view_id);
         let result_tree = &query_result.tree;
         if let Some(data_result) = result_tree.lookup_result_by_path(&self.entity_path) {
-            data_result.save_recursive_override_or_clear_if_redundant(
-                ctx,
-                &query_result.tree,
-                &Visible::from(visible),
-            );
+            data_result.save_visible(ctx, &query_result.tree, visible);
         }
     }
 
@@ -643,8 +628,8 @@ impl BlueprintTreeItem<'_> {
         }
     }
 
-    pub fn is_open(&self, ctx: &egui::Context, collapse_scope: CollapseScope) -> Option<bool> {
-        collapse_scope.item(self.item()).map(|collapse_id| {
+    pub fn is_open(&self, ctx: &egui::Context, collapse_scope: CollapseScope) -> bool {
+        collapse_scope.item(self.item()).is_some_and(|collapse_id| {
             collapse_id
                 .is_open(ctx)
                 .unwrap_or_else(|| self.default_open())

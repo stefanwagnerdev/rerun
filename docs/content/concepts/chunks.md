@@ -71,7 +71,7 @@ How does one creates and stores chunks in Rerun, then?
 
 The `log` API is generally [what we show in the getting-started guides](https://rerun.io/docs/getting-started/quick-start/python#logging-your-own-data) since it's the easiest to use:
 
-snippet: archetypes/scalar_row_updates
+snippet: archetypes/scalars_row_updates
 
 The `log` API makes it possible to send data into Rerun on a row-by-row basis, without requiring any extra effort.
 This row-oriented interface makes it very easy to integrate into existing codebase and just start logging data as it comes (hence the name).
@@ -87,7 +87,7 @@ But if you're handing a bunch of rows of data over to Rerun, how does it end up 
 #### How are these rows turned into columns?
 
 Before logging data, you can use the `rr.set_time_` APIs to update the SDK's time context with timestamps for custom timelines.
-For example, `rr.set_time_sequence("frame", 42)` will set the "frame" timeline's current value to 42 in the time context.
+For example, `rr.set_time("frame", sequence=42)` will set the "frame" timeline's current value to 42 in the time context.
 
 When you later call `rr.log`, the SDK will generate a row id and values for the built-in timelines `log_time` and `log_tick`.
 It will also grab the current values for any custom timelines from the time context.
@@ -127,7 +127,7 @@ This is what the `send_columns` API is for: it lets you efficiently update the s
 >
 > In contrast to the `log` API, `send_columns` does NOT add any other timelines to the data. Neither the built-in timelines `log_time` and `log_tick`, nor any [user timelines](../concepts/timelines.md). Only the timelines explicitly included in the call to `send_columns` will be included.
 
-snippet: archetypes/scalar_column_updates
+snippet: archetypes/scalars_column_updates
 
 See also the reference:
 * [🐍 Python `send_columns`](https://ref.rerun.io/docs/python/0.21.0/common/columnar_api/#rerun.send_columns)

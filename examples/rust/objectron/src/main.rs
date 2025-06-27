@@ -18,7 +18,7 @@ use std::{
 
 use anyhow::Context as _;
 
-use rerun::external::re_log;
+use rerun::{TimeCell, external::re_log};
 
 // --- Rerun logging ---
 
@@ -45,13 +45,12 @@ impl ArFrame {
     }
 }
 
-fn timepoint(index: usize, time: f64) -> rerun::TimePoint {
-    let timeline_time = rerun::Timeline::new_temporal("time");
-    let timeline_frame = rerun::Timeline::new_sequence("frame");
-    let time = rerun::Time::from_seconds_since_epoch(time);
-    rerun::TimePoint::default()
-        .with(timeline_time, time)
-        .with(timeline_frame, index as i64)
+fn timepoint(frame: usize, time: f64) -> rerun::TimePoint {
+    [
+        ("time", TimeCell::from_timestamp_secs_since_epoch(time)),
+        ("frame", TimeCell::from_sequence(frame as i64)),
+    ]
+    .into()
 }
 
 struct AnnotationsPerFrame<'a>(HashMap<usize, &'a objectron::FrameAnnotation>);

@@ -21,15 +21,14 @@
 pub const DEFAULT_DISPLAY_DECIMALS: usize = 3;
 
 mod archetype;
-mod arrow_buffer;
 pub mod arrow_helpers;
 mod arrow_string;
 pub mod arrow_zip_validity;
 mod as_components;
+mod component_batch;
 mod component_descriptor;
 mod id;
 mod loggable;
-mod loggable_batch;
 pub mod reflection;
 mod result;
 mod tuid;
@@ -37,20 +36,17 @@ mod view;
 
 pub use self::{
     archetype::{
-        Archetype, ArchetypeFieldName, ArchetypeName, ArchetypeReflectionMarker,
+        Archetype, ArchetypeName, ArchetypeReflectionMarker, ComponentIdentifier,
         GenericIndicatorComponent, NamedIndicatorComponent,
     },
-    arrow_buffer::ArrowBuffer,
     arrow_string::ArrowString,
     as_components::AsComponents,
+    component_batch::{ComponentBatch, SerializedComponentBatch, SerializedComponentColumn},
     component_descriptor::ComponentDescriptor,
     id::{ChunkId, RowId},
     loggable::{
-        Component, ComponentName, ComponentNameSet, DatatypeName, Loggable,
-        UnorderedComponentNameSet,
-    },
-    loggable_batch::{
-        ComponentBatch, LoggableBatch, SerializedComponentBatch, SerializedComponentColumn,
+        Component, ComponentDescriptorSet, ComponentType, DatatypeName, Loggable,
+        UnorderedComponentDescriptorSet,
     },
     result::{
         DeserializationError, DeserializationResult, ResultExt, SerializationError,
@@ -94,8 +90,6 @@ pub mod external {
 }
 
 /// Useful macro for statically asserting that a `struct` contains some specific fields.
-///
-/// For asserting that an archetype has a specific component use `re_log_types::debug_assert_archetype_has_components`
 ///
 ///  ```
 /// # #[macro_use] extern crate re_types_core;
@@ -153,11 +147,11 @@ macro_rules! static_assert_struct_has_fields {
 /// merely be logged, not returned (except in debug builds, where all errors panic).
 #[doc(hidden)] // public so we can access it from re_types too
 #[allow(clippy::unnecessary_wraps)] // clippy gets confused in debug builds
-pub fn try_serialize_field<C: crate::Component>(
+pub fn try_serialize_field<L: Loggable>(
     descriptor: ComponentDescriptor,
-    instances: impl IntoIterator<Item = impl Into<C>>,
+    instances: impl IntoIterator<Item = impl Into<L>>,
 ) -> Option<SerializedComponentBatch> {
-    let res = C::to_arrow(
+    let res = L::to_arrow(
         instances
             .into_iter()
             .map(|v| std::borrow::Cow::Owned(v.into())),

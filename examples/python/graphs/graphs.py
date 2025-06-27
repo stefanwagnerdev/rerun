@@ -13,20 +13,17 @@ import rerun.blueprint as rrb
 from rerun.blueprint.archetypes.force_collision_radius import ForceCollisionRadius
 from rerun.blueprint.archetypes.force_link import ForceLink
 from rerun.blueprint.archetypes.force_many_body import ForceManyBody
-from rerun.components.color import Color
-from rerun.components.radius import Radius
-from rerun.components.show_labels import ShowLabels
 
 color_scheme = [
-    Color([228, 26, 28]),  # Red
-    Color([55, 126, 184]),  # Blue
-    Color([77, 175, 74]),  # Green
-    Color([152, 78, 163]),  # Purple
-    Color([255, 127, 0]),  # Orange
-    Color([255, 255, 51]),  # Yellow
-    Color([166, 86, 40]),  # Brown
-    Color([247, 129, 191]),  # Pink
-    Color([153, 153, 153]),  # Gray
+    [228, 26, 28, 255],  # Red
+    [55, 126, 184, 255],  # Blue
+    [77, 175, 74, 255],  # Green
+    [152, 78, 163, 255],  # Purple
+    [255, 127, 0, 255],  # Orange
+    [255, 255, 51, 255],  # Yellow
+    [166, 86, 40, 255],  # Brown
+    [247, 129, 191, 255],  # Pink
+    [153, 153, 153, 255],  # Gray
 ]
 
 DESCRIPTION = """
@@ -51,7 +48,7 @@ def log_lattice(num_nodes: int) -> None:
     nodes, colors = zip(*[
         (
             str(i),
-            rr.components.Color([round((x / (num_nodes - 1)) * 255), round((y / (num_nodes - 1)) * 255), 0]),
+            rr.components.Color([round((x / (num_nodes - 1)) * 255), round((y / (num_nodes - 1)) * 255), 0, 255]),
         )
         for i, (x, y) in enumerate(coordinates)
     ])
@@ -83,7 +80,7 @@ def log_lattice(num_nodes: int) -> None:
 def log_trees() -> None:
     nodes = ["root"]
     radii = [42]
-    colors = [Color([81, 81, 81])]
+    colors = [[81, 81, 81, 255]]
     edges = []
 
     # Randomly add nodes and edges to the graph
@@ -95,7 +92,7 @@ def log_trees() -> None:
         colors.append(random.choice(color_scheme))
         edges.append((existing, new_node))
 
-        rr.set_time_sequence("frame", i)
+        rr.set_time("frame", sequence=i)
         rr.log(
             "node_link",
             rr.GraphNodes(nodes, labels=nodes, radii=radii, colors=colors),
@@ -116,11 +113,11 @@ def log_markov_chain() -> None:
     state_names = ["sunny", "rainy", "cloudy"]
     # For this example, we use hardcoded positions.
     positions = [[0, 0], [150, 150], [300, 0]]
-    inactive_color = Color([153, 153, 153])  # Gray
+    inactive_color = [153, 153, 153, 255]  # Gray
     active_colors = [
-        Color([255, 127, 0]),  # Orange
-        Color([55, 126, 184]),  # Blue
-        Color([152, 78, 163]),  # Purple
+        [255, 127, 0, 255],  # Orange
+        [55, 126, 184, 255],  # Blue
+        [152, 78, 163, 255],  # Purple
     ]
 
     edges = [
@@ -141,7 +138,7 @@ def log_markov_chain() -> None:
         colors = [inactive_color] * len(state_names)
         colors[next_state_index] = active_colors[next_state_index]
 
-        rr.set_time_sequence("frame", i)
+        rr.set_time("frame", sequence=i)
         rr.log(
             "markov_chain",
             rr.GraphNodes(state_names, labels=state_names, colors=colors, positions=positions),
@@ -165,14 +162,14 @@ def log_blueprint() -> None:
                     force_link=ForceLink(enabled=False),
                     force_many_body=ForceManyBody(enabled=False),
                     force_collision_radius=ForceCollisionRadius(enabled=True),
-                    defaults=[ShowLabels(False)],
+                    defaults=[rr.GraphNodes.from_fields(show_labels=False)],
                 ),
                 rrb.GraphView(
                     origin="lattice",
                     name="Lattice",
                     force_link=ForceLink(distance=60),
                     force_many_body=ForceManyBody(strength=-60),
-                    defaults=[ShowLabels(False), Radius(10)],
+                    defaults=[rr.GraphNodes.from_fields(show_labels=False, radii=10)],
                 ),
                 rrb.Horizontal(
                     rrb.GraphView(
@@ -182,8 +179,8 @@ def log_blueprint() -> None:
                     ),
                     rrb.TextDocumentView(origin="description", name="Description"),
                 ),
-            )
-        )
+            ),
+        ),
     )
 
 

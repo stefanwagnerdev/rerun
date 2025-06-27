@@ -1,32 +1,44 @@
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use ahash::HashMap;
+use egui::os::OperatingSystem;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
+use crate::{
+    ApplicationSelectionState, CommandReceiver, CommandSender, ComponentUiRegistry,
+    DataQueryResult, GlobalContext, ItemCollection, RecordingConfig, StorageContext, StoreContext,
+    SystemCommand, ViewClass, ViewClassRegistry, ViewId, ViewStates, ViewerContext,
+    blueprint_timeline, command_channel,
+};
 use re_chunk::{Chunk, ChunkBuilder};
 use re_chunk_store::LatestAtQuery;
 use re_entity_db::EntityDb;
+use re_global_context::DisplayMode;
 use re_log_types::{EntityPath, StoreId, StoreKind, Timeline};
 use re_types_core::reflection::Reflection;
-
-use crate::{
-    blueprint_timeline, command_channel, ApplicationSelectionState, CommandReceiver, CommandSender,
-    ComponentUiRegistry, DataQueryResult, GlobalContext, ItemCollection, RecordingConfig,
-    StoreContext, SystemCommand, ViewClass, ViewClassRegistry, ViewId, ViewStates, ViewerContext,
-};
+use re_ui::Help;
 
 pub trait HarnessExt {
-    /// Fails the test iff more than `broken_percent_threshold`% pixels are broken.
+    /// Fails the test iff more than `broken_pixels_fraction * num_pixels` pixels are broken.
     //
     // TODO(emilk/egui#5683): this should be natively supported by kittest
     fn snapshot_with_broken_pixels_threshold(
         &mut self,
         name: &str,
         num_pixels: u64,
-        broken_percent_threshold: f64,
+        broken_pixels_fraction: f64,
     );
+
+    fn try_snapshot_with_broken_pixels_threshold(
+        &mut self,
+        name: &str,
+        num_pixels: u64,
+        broken_pixels_fraction: f64,
+    ) -> bool;
+
+    fn snapshot_with_broken_pixels(&mut self, name: &str, broken_pixels: usize);
 }
 
 impl HarnessExt for egui_kittest::Harness<'_> {
@@ -34,7 +46,7 @@ impl HarnessExt for egui_kittest::Harness<'_> {
         &mut self,
         name: &str,
         num_pixels: u64,
-        broken_percent_threshold: f64,
+        broken_fraction_threshold: f64,
     ) {
         match self.try_snapshot(name) {
             Ok(_) => {}
@@ -45,11 +57,66 @@ impl HarnessExt for egui_kittest::Harness<'_> {
                     diff: num_broken_pixels,
                     diff_path,
                 } => {
-                    let broken_percent = num_broken_pixels as f64 / num_pixels as f64;
-                    re_log::debug!(num_pixels, num_broken_pixels, broken_percent);
+                    let broken_fraction = num_broken_pixels as f64 / num_pixels as f64;
+                    re_log::debug!(num_pixels, num_broken_pixels, broken_fraction);
                     assert!(
-                        broken_percent <= broken_percent_threshold,
-                        "{name} failed because {broken_percent} > {broken_percent_threshold}\n{diff_path:?}"
+                        broken_fraction <= broken_fraction_threshold,
+                        "{name} failed because {broken_fraction} > {broken_fraction_threshold}\n{diff_path:?}"
+                    );
+                }
+
+                _ => panic!("{name} failed: {err}"),
+            },
+        }
+    }
+
+    fn try_snapshot_with_broken_pixels_threshold(
+        &mut self,
+        name: &str,
+        num_pixels: u64,
+        broken_pixels_fraction: f64,
+    ) -> bool {
+        match self.try_snapshot(name) {
+            Ok(_) => true,
+
+            Err(err) => match err {
+                egui_kittest::SnapshotError::Diff {
+                    name,
+                    diff: num_broken_pixels,
+                    diff_path,
+                } => {
+                    let broken_fraction = num_broken_pixels as f64 / num_pixels as f64;
+                    re_log::debug!(num_pixels, num_broken_pixels, broken_fraction);
+                    if broken_fraction >= broken_pixels_fraction {
+                        re_log::error!(
+                            "{name} failed because {broken_fraction} > {broken_pixels_fraction}\n{diff_path:?}"
+                        );
+                        return false;
+                    }
+
+                    true
+                }
+
+                _ => panic!("{name} failed: {err}"),
+            },
+        }
+    }
+
+    #[track_caller]
+    fn snapshot_with_broken_pixels(&mut self, name: &str, broken_pixels_threshold: usize) {
+        match self.try_snapshot(name) {
+            Ok(_) => {}
+
+            Err(err) => match err {
+                egui_kittest::SnapshotError::Diff {
+                    name,
+                    diff: num_broken_pixels,
+                    diff_path,
+                } => {
+                    re_log::debug!(num_broken_pixels, broken_pixels_threshold);
+                    assert!(
+                        num_broken_pixels as usize <= broken_pixels_threshold,
+                        "{name} failed because {num_broken_pixels} > {broken_pixels_threshold}\n{diff_path:?}"
                     );
                 }
 
@@ -91,6 +158,8 @@ pub struct TestContext {
     pub component_ui_registry: ComponentUiRegistry,
     pub reflection: Reflection,
 
+    pub connection_registry: re_grpc_client::ConnectionRegistryHandle,
+
     command_sender: CommandSender,
     command_receiver: CommandReceiver,
 
@@ -111,12 +180,15 @@ impl Default for TestContext {
 
         let blueprint_query = LatestAtQuery::latest(blueprint_timeline());
 
-        let component_ui_registry = ComponentUiRegistry::new(Box::new(
-            |_ctx, _ui, _ui_layout, _query, _db, _entity_path, _row_id, _component| {},
-        ));
+        let component_ui_registry = ComponentUiRegistry::new();
 
         let reflection =
             re_types::reflection::generate_reflection().expect("Failed to generate reflection");
+
+        recording_config
+            .time_ctrl
+            .write()
+            .set_timeline(Timeline::log_tick());
 
         Self {
             recording_store,
@@ -130,6 +202,8 @@ impl Default for TestContext {
             query_results: Default::default(),
             component_ui_registry,
             reflection,
+            connection_registry: re_grpc_client::ConnectionRegistry::new(),
+
             command_sender,
             command_receiver,
 
@@ -217,7 +291,7 @@ fn init_shared_renderer_setup() -> SharedWgpuResources {
     let device_caps = re_renderer::device_caps::DeviceCaps::from_adapter(&adapter)
         .expect("Failed to determine device capabilities");
     let (device, queue) =
-        pollster::block_on(adapter.request_device(&device_caps.device_descriptor(), None))
+        pollster::block_on(adapter.request_device(&device_caps.device_descriptor()))
             .expect("Failed to request device.");
 
     SharedWgpuResources {
@@ -301,14 +375,16 @@ impl TestContext {
             blueprint: &self.blueprint_store,
             default_blueprint: None,
             recording: &self.recording_store,
-            bundle: &Default::default(),
             caches: &Default::default(),
-            hub: &Default::default(),
             should_enable_heuristics: false,
         };
+
         let indicated_entities_per_visualizer = self
             .view_class_registry
             .indicated_entities_per_visualizer(&store_context.recording.store_id());
+        let maybe_visualizable_entities_per_visualizer = self
+            .view_class_registry
+            .maybe_visualizable_entities_for_visualizer_systems(&self.recording_store.store_id());
 
         let drag_and_drop_manager = crate::DragAndDropManager::new(ItemCollection::default());
 
@@ -328,14 +404,23 @@ impl TestContext {
             global_context: GlobalContext {
                 app_options: &Default::default(),
                 reflection: &self.reflection,
-                component_ui_registry: &self.component_ui_registry,
-                view_class_registry: &self.view_class_registry,
+
                 egui_ctx,
                 command_sender: &self.command_sender,
                 render_ctx,
+
+                connection_registry: &self.connection_registry,
+                display_mode: &DisplayMode::LocalRecordings,
             },
+            component_ui_registry: &self.component_ui_registry,
+            view_class_registry: &self.view_class_registry,
             store_context: &store_context,
-            maybe_visualizable_entities_per_visualizer: &Default::default(),
+            storage_context: &StorageContext {
+                hub: &Default::default(),
+                bundle: &Default::default(),
+                tables: &Default::default(),
+            },
+            maybe_visualizable_entities_per_visualizer: &maybe_visualizable_entities_per_visualizer,
             indicated_entities_per_visualizer: &indicated_entities_per_visualizer,
             query_results: &self.query_results,
             rec_cfg: &self.recording_config,
@@ -426,13 +511,21 @@ impl TestContext {
             let mut handled = true;
             let command_name = format!("{command:?}");
             match command {
-                SystemCommand::UpdateBlueprint(store_id, chunks) => {
-                    assert_eq!(store_id, self.blueprint_store.store_id());
-
-                    for chunk in chunks {
-                        self.blueprint_store
-                            .add_chunk(&Arc::new(chunk))
-                            .expect("Updating the blueprint chunk store failed");
+                SystemCommand::AppendToStore(store_id, chunks) => {
+                    if store_id == self.recording_store.store_id() {
+                        for chunk in chunks {
+                            self.recording_store
+                                .add_chunk(&Arc::new(chunk))
+                                .expect("Updating the recording chunk store failed");
+                        }
+                    } else if store_id == self.blueprint_store.store_id() {
+                        for chunk in chunks {
+                            self.blueprint_store
+                                .add_chunk(&Arc::new(chunk))
+                                .expect("Updating the blueprint chunk store failed");
+                        }
+                    } else {
+                        panic!("Unknown store id: {store_id:?}");
                     }
                 }
 
@@ -450,17 +543,24 @@ impl TestContext {
                     *self.focused_item.lock() = Some(item);
                 }
 
-                SystemCommand::SetActiveTimeline { rec_id, timeline } => {
+                SystemCommand::SetActiveTime {
+                    rec_id,
+                    timeline,
+                    time,
+                } => {
                     assert_eq!(rec_id, self.recording_store.store_id());
-                    self.recording_config
-                        .time_ctrl
-                        .write()
-                        .set_timeline(timeline);
+                    let mut time_ctrl = self.recording_config.time_ctrl.write();
+                    time_ctrl.set_timeline(timeline);
+                    if let Some(time) = time {
+                        time_ctrl.set_time(time);
+                    }
                 }
 
                 // not implemented
                 SystemCommand::ActivateApp(_)
+                | SystemCommand::ActivateRecordingOrTable(_)
                 | SystemCommand::CloseApp(_)
+                | SystemCommand::CloseRecordingOrTable(_)
                 | SystemCommand::LoadDataSource(_)
                 | SystemCommand::ClearSourceAndItsStores(_)
                 | SystemCommand::AddReceiver { .. }
@@ -469,11 +569,9 @@ impl TestContext {
                 | SystemCommand::ClearActiveBlueprint
                 | SystemCommand::ClearActiveBlueprintAndEnableHeuristics
                 | SystemCommand::AddRedapServer { .. }
-                | SystemCommand::ActivateRecording(_)
-                | SystemCommand::CloseStore(_)
                 | SystemCommand::UndoBlueprint { .. }
                 | SystemCommand::RedoBlueprint { .. }
-                | SystemCommand::CloseAllRecordings
+                | SystemCommand::CloseAllEntries
                 | SystemCommand::SetLoopSelection { .. } => handled = false,
 
                 #[cfg(debug_assertions)]
@@ -486,6 +584,28 @@ impl TestContext {
             if !handled {
                 eprintln!("Ignored system command: {command_name:?}",);
             }
+        }
+    }
+
+    pub fn test_help_view(help: impl Fn(OperatingSystem) -> Help) {
+        use egui::os::OperatingSystem;
+        for os in [OperatingSystem::Mac, OperatingSystem::Windows] {
+            let mut harness = egui_kittest::Harness::builder().build_ui(|ui| {
+                ui.ctx().set_os(os);
+                re_ui::apply_style_and_install_loaders(ui.ctx());
+                help(os).ui(ui);
+            });
+            let help_view = help(os);
+            let name = format!(
+                "help_view_{}_{os:?}",
+                help_view
+                    .title()
+                    .expect("View help texts should have titles")
+            )
+            .replace(' ', "_")
+            .to_lowercase();
+            harness.fit_contents();
+            harness.snapshot(&name);
         }
     }
 }

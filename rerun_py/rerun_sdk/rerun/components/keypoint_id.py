@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -29,11 +28,10 @@ class KeypointId(datatypes.KeypointId, ComponentMixin):
     # You can define your own __init__ function as a member of KeypointIdExt in keypoint_id_ext.py
 
     # Note: there are no fields here because KeypointId delegates to datatypes.KeypointId
-    pass
 
 
 class KeypointIdBatch(datatypes.KeypointIdBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.KeypointId")
+    _COMPONENT_TYPE: str = "rerun.components.KeypointId"
 
 
 # This is patched in late to avoid circular dependencies.

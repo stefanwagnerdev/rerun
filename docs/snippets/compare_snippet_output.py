@@ -8,20 +8,26 @@ import argparse
 import glob
 import multiprocessing
 import os
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any, cast
 
 import tomlkit
+from tomlkit.container import Container
 
 sys.path.append(os.path.dirname(os.path.realpath(__file__)) + "/../../scripts/")
 from roundtrip_utils import roundtrip_env, run, run_comparison  # noqa
 
 config_path = Path(__file__).parent / "snippets.toml"
 config = tomlkit.loads(config_path.read_text())
-OPT_OUT_ENTIRELY = config["opt_out"]["run"]
-OPT_OUT_COMPARE = config["opt_out"]["compare"]
-EXTRA_ARGS = config["extra_args"]
+
+OPT_OUT: dict[str, Any] = cast(Container, config["opt_out"])
+OPT_OUT_ENTIRELY: dict[str, Any] = OPT_OUT["run"].value
+OPT_OUT_COMPARE = OPT_OUT["compare"].value
+EXTRA_ARGS = config["extra_args"].value
 
 
 class Example:
@@ -32,13 +38,13 @@ class Example:
     def opt_out_entirely(self) -> list[str]:
         for key in [self.subdir, self.subdir + "/" + self.name]:
             if key in OPT_OUT_ENTIRELY:
-                return OPT_OUT_ENTIRELY[key]
+                return list(OPT_OUT_ENTIRELY[key])
         return []
 
     def opt_out_compare(self) -> list[str]:
         for key in [self.subdir, self.subdir + "/" + self.name]:
             if key in OPT_OUT_COMPARE:
-                return OPT_OUT_COMPARE[key]
+                return list(OPT_OUT_COMPARE[key])
         return []
 
     def extra_args(self) -> list[str]:
@@ -51,6 +57,15 @@ class Example:
 
     def output_path(self, language: str) -> str:
         return f"docs/snippets/all/{self.subdir}/{self.name}_{language}.rrd"
+
+    def backwards_compatibility_path(self) -> Path:
+        """
+        Files checked in to CI that tests backwards compatibility.
+
+        We use this path as a source for comparison ("are old files correctly migrated?")
+        and as a destination when these files need updating using --write-missing-backward-assets.
+        """
+        return Path(f"tests/assets/rrd/snippets/{self.subdir}/{self.name}.rrd")
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Example):
@@ -65,6 +80,9 @@ class Example:
 
     def __repr__(self) -> str:
         return f"Example(subdir={self.subdir}, name={self.name})"
+
+    def __str__(self) -> str:
+        return f"{self.subdir}/{self.name}"
 
 
 def main() -> None:
@@ -82,7 +100,12 @@ def main() -> None:
     parser.add_argument("--release", action="store_true", help="Run cargo invocations with --release")
     parser.add_argument("--target", type=str, default=None, help="Target used for cargo invocations")
     parser.add_argument("--target-dir", type=str, default=None, help="Target directory used for cargo invocations")
-    parser.add_argument("example", nargs="*", type=str, default=None, help="Run only the specified examples")
+    parser.add_argument(
+        "--write-missing-backward-assets",
+        action="store_true",
+        help="Add any missing asset files to tests/assets/rrd/snippets",
+    )
+    parser.add_argument("example", nargs="*", type=str, default=None, help="Run only the specified example(s)")
 
     args = parser.parse_args()
 
@@ -101,7 +124,7 @@ def main() -> None:
         pass  # No need to build the C++ SDK
     elif args.no_cpp_build:
         print(
-            "Skipping cmake configure & build for rerun_c & rerun_prebuilt_cpp - assuming it is already built and up-to-date!"
+            "Skipping cmake configure & build for rerun_c & rerun_prebuilt_cpp - assuming it is already built and up-to-date!",
         )
     else:
         build_cpp_snippets()
@@ -119,6 +142,8 @@ def main() -> None:
         dir = os.path.join(os.path.dirname(__file__), "all")
         for file in glob.glob(dir + "/**", recursive=True):
             name = os.path.basename(file)
+            if name == "__init__.py":
+                continue
             name, extension = os.path.splitext(name)
             if extension == ".cpp" and not args.no_cpp or extension == ".py" and not args.no_py or extension == ".rs":
                 subdir = os.path.relpath(os.path.dirname(file), dir)
@@ -151,32 +176,85 @@ def main() -> None:
             job.get()
 
     print("----------------------------------------------------------")
+    print(f"Active languages: {active_languages}")
     print(f"Comparing {len(examples)} examples…")
+
+    errors = []
 
     for example in examples:
         print()
-        print("----------------------------------------------------------")
-        print(f"Comparing example '{example}'…")
+        print(f"Comparing '{example}'…")
 
         example_opt_out_entirely = example.opt_out_entirely()
         example_opt_out_compare = example.opt_out_compare()
 
         if "rust" in example_opt_out_entirely:
-            continue  # No baseline to compare against
+            print("SKIPPED: Missing Rust baseline to compare against")
+            continue
 
+        backwards_path = example.backwards_compatibility_path()
         cpp_output_path = example.output_path("cpp")
         python_output_path = example.output_path("python")
         rust_output_path = example.output_path("rust")
 
-        if "cpp" in active_languages and "cpp" not in example_opt_out_entirely and "cpp" not in example_opt_out_compare:
-            run_comparison(cpp_output_path, rust_output_path, args.full_dump)
+        if args.write_missing_backward_assets:
+            if not backwards_path.exists():
+                print(f"Writing new backwards-compatibility file to {backwards_path}…")
+                backwards_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(rust_output_path, backwards_path)
+                subprocess.call(["git", "add", "-f", backwards_path])
+        else:
+            try:
+                # Compare old snippet files checked in to git lfs, to the newly generated ones.
+                # They should be the same!
+                run_comparison(backwards_path, rust_output_path, args.full_dump)
+            except Exception as e:
+                errors.append((example, "old-rrd-files", e))
 
-        if "py" in active_languages and "py" not in example_opt_out_entirely and "py" not in example_opt_out_compare:
-            run_comparison(python_output_path, rust_output_path, args.full_dump)
+        if "cpp" in active_languages:
+            if "cpp" in example_opt_out_entirely:
+                print("Skipping cpp completely")
+            elif "cpp" in example_opt_out_compare:
+                print("Skipping cpp compare")
+            else:
+                try:
+                    run_comparison(cpp_output_path, rust_output_path, args.full_dump)
+                except Exception as e:
+                    errors.append((example, "C++", e))
 
-    print()
-    print("----------------------------------------------------------")
-    print("All tests passed!")
+        if "py" in active_languages:
+            if "py" in example_opt_out_entirely:
+                print("Skipping py completely")
+            elif "py" in example_opt_out_compare:
+                print("Skipping py compare")
+            else:
+                try:
+                    run_comparison(python_output_path, rust_output_path, args.full_dump)
+                except Exception as e:
+                    errors.append((example, "Python", e))
+
+    if len(errors) == 0:
+        print("All tests passed!")
+    else:
+        print(f"{len(errors)} errors found:")
+
+        for example, comparison, _error in errors:
+            print(f"❌ {example} - {comparison} differs from Rust baseline")
+
+        for example, comparison, error in errors:
+            print()
+            print(f"❌ {example} - {comparison} differs from Rust baseline:")
+            print(error)
+            print("--------------------------------------")
+
+        print()
+        print("----------------------------------------------------------")
+        print()
+
+        for example, comparison, _error in errors:
+            print(f"❌ {example} - {comparison} differs from Rust baseline")
+
+        sys.exit(1)
 
 
 def run_example(example: Example, language: str, args: argparse.Namespace) -> None:
@@ -190,10 +268,10 @@ def run_example(example: Example, language: str, args: argparse.Namespace) -> No
         rust_output_path = run_prebuilt_rust(example, args.release, args.target, args.target_dir)
         check_non_empty_rrd(rust_output_path)
     else:
-        assert False, f"Unknown language: {language}"
+        raise AssertionError(f"Unknown language: {language}")
 
 
-def build_rust_snippets(build_env: dict[str, str], release: bool, target: str | None, target_dir: str | None):
+def build_rust_snippets(build_env: dict[str, str], release: bool, target: str | None, target_dir: str | None) -> None:
     print("----------------------------------------------------------")
     print("Building snippets for Rust…")
 
@@ -212,7 +290,7 @@ def build_rust_snippets(build_env: dict[str, str], release: bool, target: str | 
     print("")
 
 
-def build_python_sdk(build_env: dict[str, str]):
+def build_python_sdk(build_env: dict[str, str]) -> None:
     print("----------------------------------------------------------")
     print("Building rerun-sdk for Python…")
     start_time = time.time()
@@ -222,7 +300,7 @@ def build_python_sdk(build_env: dict[str, str]):
     print("")
 
 
-def build_cpp_snippets():
+def build_cpp_snippets() -> None:
     print("----------------------------------------------------------")
     print("Build rerun_c & rerun_prebuilt_cpp…")
     start_time = time.time()
@@ -286,7 +364,7 @@ def check_non_empty_rrd(path: str) -> None:
     from pathlib import Path
 
     assert Path(path).stat().st_size > 0
-    print(f"Confirmed output written to {Path(path).absolute()}")
+    # print(f"Confirmed output written to {Path(path).absolute()}")
 
 
 if __name__ == "__main__":

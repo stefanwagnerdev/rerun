@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -22,11 +21,10 @@ class AlbedoFactor(datatypes.Rgba32, ComponentMixin):
     # You can define your own __init__ function as a member of AlbedoFactorExt in albedo_factor_ext.py
 
     # Note: there are no fields here because AlbedoFactor delegates to datatypes.Rgba32
-    pass
 
 
 class AlbedoFactorBatch(datatypes.Rgba32Batch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.AlbedoFactor")
+    _COMPONENT_TYPE: str = "rerun.components.AlbedoFactor"
 
 
 # This is patched in late to avoid circular dependencies.

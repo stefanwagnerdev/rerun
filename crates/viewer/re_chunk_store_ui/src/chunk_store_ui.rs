@@ -2,16 +2,18 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use egui_extras::{Column, TableRow};
-use itertools::{Either, Itertools};
+use itertools::{Either, Itertools as _};
 
 use re_chunk_store::{ChunkStore, LatestAtQuery, RangeQuery};
-use re_log_types::{ResolvedTimeRange, StoreKind, TimeType, TimeZone, Timeline, TimelineName};
-use re_ui::{list_item, UiExt as _};
-use re_viewer_context::ViewerContext;
+use re_log_types::{
+    ResolvedTimeRange, StoreKind, TimeType, Timeline, TimelineName, TimestampFormat,
+};
+use re_ui::{UiExt as _, list_item};
+use re_viewer_context::StoreContext;
 
 use crate::chunk_list_mode::{ChunkListMode, ChunkListQueryMode};
 use crate::chunk_ui::ChunkUi;
-use crate::sort::{sortable_column_header_ui, SortColumn, SortDirection};
+use crate::sort::{SortColumn, SortDirection, sortable_column_header_ui};
 
 /// Any column that can be sorted.
 #[derive(Default, Clone, Copy, PartialEq)]
@@ -70,7 +72,12 @@ impl DatastoreUi {
     ///
     /// Returns `false` if the datastore UI should be closed (e.g., the close button was clicked),
     /// or `true` if the datastore UI should remain open.
-    pub fn ui(&mut self, ctx: &ViewerContext<'_>, ui: &mut egui::Ui, time_zone: TimeZone) -> bool {
+    pub fn ui(
+        &mut self,
+        ctx: &StoreContext<'_>,
+        ui: &mut egui::Ui,
+        timestamp_format: TimestampFormat,
+    ) -> bool {
         let mut datastore_ui_active = true;
 
         egui::Frame {
@@ -79,17 +86,17 @@ impl DatastoreUi {
         }
         .show(ui, |ui| {
             let exit_focused_chunk = if let Some(focused_chunk) = &mut self.focused_chunk {
-                focused_chunk.ui(ui, time_zone)
+                focused_chunk.ui(ui, timestamp_format)
             } else {
                 self.chunk_store_ui(
                     ui,
                     match self.store_kind {
-                        StoreKind::Recording => ctx.recording_engine(),
-                        StoreKind::Blueprint => ctx.blueprint_engine(),
+                        StoreKind::Recording => ctx.recording.storage_engine(),
+                        StoreKind::Blueprint => ctx.blueprint.storage_engine(),
                     }
                     .store(),
                     &mut datastore_ui_active,
-                    time_zone,
+                    timestamp_format,
                 );
 
                 false
@@ -108,14 +115,16 @@ impl DatastoreUi {
         ui: &mut egui::Ui,
         chunk_store: &ChunkStore,
         datastore_ui_active: &mut bool,
-        time_zone: TimeZone,
+        timestamp_format: TimestampFormat,
     ) {
+        let tokens = ui.tokens();
+
         let should_copy_chunk = self.chunk_store_info_ui(ui, chunk_store, datastore_ui_active);
 
         // Each of these must be a column that contains the corresponding time range.
         let all_timelines = chunk_store.timelines();
 
-        self.chunk_list_mode.ui(ui, chunk_store, time_zone);
+        self.chunk_list_mode.ui(ui, chunk_store, timestamp_format);
 
         //
         // Collect chunks based on query mode
@@ -126,7 +135,7 @@ impl DatastoreUi {
             ChunkListMode::Query {
                 timeline,
                 entity_path,
-                component_name,
+                component_descr,
                 query: ChunkListQueryMode::LatestAt(at),
                 ..
             } => Either::Right(
@@ -134,14 +143,14 @@ impl DatastoreUi {
                     .latest_at_relevant_chunks(
                         &LatestAtQuery::new(*timeline.name(), *at),
                         entity_path,
-                        *component_name,
+                        component_descr,
                     )
                     .into_iter(),
             ),
             ChunkListMode::Query {
                 timeline,
                 entity_path,
-                component_name,
+                component_descr,
                 query: ChunkListQueryMode::Range(range),
                 ..
             } => Either::Right(
@@ -149,7 +158,7 @@ impl DatastoreUi {
                     .range_relevant_chunks(
                         &RangeQuery::new(*timeline.name(), *range),
                         entity_path,
-                        *component_name,
+                        component_descr,
                     )
                     .into_iter(),
             ),
@@ -172,7 +181,10 @@ impl DatastoreUi {
             ui.label("component:");
             ui.text_edit_singleline(&mut self.component_filter);
 
-            if ui.small_icon_button(&re_ui::icons::CLOSE).clicked() {
+            if ui
+                .small_icon_button(&re_ui::icons::CLOSE, "Close")
+                .clicked()
+            {
                 self.entity_path_filter = String::new();
                 self.component_filter = String::new();
             }
@@ -196,10 +208,11 @@ impl DatastoreUi {
         } else {
             let component_filter = self.component_filter.to_lowercase();
             Either::Right(chunk_iterator.filter(move |chunk| {
-                chunk
-                    .components()
-                    .keys()
-                    .any(|name| name.short_name().to_lowercase().contains(&component_filter))
+                chunk.components().keys().any(|name| {
+                    name.display_name()
+                        .to_lowercase()
+                        .contains(&component_filter)
+                })
             }))
         };
 
@@ -304,7 +317,7 @@ impl DatastoreUi {
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
 
                     if let Some(time_range) = timeline_ranges.get(timeline.name()) {
-                        ui.label(format_time_range(timeline, time_range, time_zone));
+                        ui.label(format_time_range(timeline, time_range, timestamp_format));
                     } else {
                         ui.label("-");
                     };
@@ -316,7 +329,7 @@ impl DatastoreUi {
                     chunk
                         .components()
                         .keys()
-                        .map(|name| name.short_name())
+                        .map(|name| name.display_name())
                         .join(", "),
                 );
             });
@@ -339,13 +352,9 @@ impl DatastoreUi {
                     .striped(true);
 
                 table_builder
-                    .header(re_ui::DesignTokens::table_line_height(), header_ui)
+                    .header(tokens.deprecated_table_line_height(), header_ui)
                     .body(|body| {
-                        body.rows(
-                            re_ui::DesignTokens::table_line_height(),
-                            chunks.len(),
-                            row_ui,
-                        );
+                        body.rows(tokens.deprecated_table_line_height(), chunks.len(), row_ui);
                     });
             });
     }
@@ -449,28 +458,30 @@ impl DatastoreUi {
 fn format_time_range(
     timeline: &Timeline,
     time_range: &ResolvedTimeRange,
-    time_zone: TimeZone,
+    timestamp_format: TimestampFormat,
 ) -> String {
     if time_range.min() == time_range.max() {
-        timeline.typ().format(time_range.min(), time_zone)
+        timeline.typ().format(time_range.min(), timestamp_format)
     } else {
-        format!(
-            "{} ({})",
-            timeline.format_time_range(time_range, time_zone),
-            match timeline.typ() {
-                TimeType::Time => {
-                    format!(
-                        "{}s",
-                        re_format::format_f64(
-                            (time_range.max().as_f64() - time_range.min().as_f64())
-                                / 1_000_000_000.0
-                        )
-                    )
-                }
-                TimeType::Sequence => {
-                    format!("{} ticks", re_format::format_uint(time_range.abs_length()))
-                }
+        let length = match timeline.typ() {
+            TimeType::Sequence => {
+                format!("{} ticks", re_format::format_uint(time_range.abs_length()))
             }
+
+            // The relartive time for both these are duration:
+            TimeType::DurationNs | TimeType::TimestampNs => {
+                format!(
+                    "{}s",
+                    re_format::format_f64(
+                        (time_range.max().as_f64() - time_range.min().as_f64()) / 1_000_000_000.0
+                    )
+                )
+            }
+        };
+
+        format!(
+            "{} ({length})",
+            timeline.format_time_range(time_range, timestamp_format)
         )
     }
 }

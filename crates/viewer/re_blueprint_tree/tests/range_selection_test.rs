@@ -1,17 +1,16 @@
 #![cfg(feature = "testing")]
 
-use egui::Vec2;
-use egui_kittest::kittest::{Key, Queryable};
+use egui::{Modifiers, Vec2};
+use egui_kittest::kittest::Queryable as _;
 use re_blueprint_tree::BlueprintTree;
-use re_chunk_store::external::re_chunk::ChunkBuilder;
 use re_chunk_store::RowId;
-use re_log_types::{build_frame_nr, Timeline};
+use re_chunk_store::external::re_chunk::ChunkBuilder;
+use re_log_types::{Timeline, build_frame_nr};
 use re_types::archetypes::Points3D;
 use re_viewer_context::test_context::TestContext;
-use re_viewer_context::{Contents, RecommendedView, ViewClass, VisitorControlFlow};
-use re_viewport_blueprint::test_context_ext::TestContextExt;
+use re_viewer_context::{Contents, RecommendedView, ViewClass as _, VisitorControlFlow};
+use re_viewport_blueprint::test_context_ext::TestContextExt as _;
 use re_viewport_blueprint::{ViewBlueprint, ViewportBlueprint};
-use std::ops::ControlFlow;
 
 #[test]
 fn test_range_selection_in_blueprint_tree() {
@@ -55,15 +54,13 @@ fn test_range_selection_in_blueprint_tree() {
                         );
 
                         // expand the view
-                        //TODO(ab): with Rust 1.83, use `break_value().expect()` instead.
-                        let ControlFlow::Break(view_id) =
-                            blueprint.visit_contents(&mut |contents, _| match contents {
+                        let view_id = blueprint
+                            .visit_contents(&mut |contents, _| match contents {
                                 Contents::View(id) => VisitorControlFlow::Break(*id),
                                 Contents::Container(_) => VisitorControlFlow::Continue,
                             })
-                        else {
-                            panic!("A view we know exists was not found");
-                        };
+                            .break_value()
+                            .expect("A view we know exists was not found");
 
                         re_context_menu::collapse_expand::collapse_expand_view(
                             viewer_ctx,
@@ -86,32 +83,16 @@ fn test_range_selection_in_blueprint_tree() {
 
     harness.run();
     let node2 = harness.get_by_label("entity2");
-    node2.key_down(Key::Shift);
-    node2.click();
-    node2.key_up(Key::Shift);
-
-    //TODO(emilk/egui#5693): remove this when https://github.com/emilk/egui/pull/5693 is landed/released
-    harness.input_mut().modifiers = egui::Modifiers::SHIFT;
+    node2.click_modifiers(Modifiers::SHIFT);
     harness.run();
 
     let node5 = harness.get_by_label("entity5");
-    node5.key_down(Key::Command);
-    node5.click();
-    node5.key_up(Key::Command);
-
-    //TODO(emilk/egui#5693): remove this when https://github.com/emilk/egui/pull/5693 is landed/released
-    harness.input_mut().modifiers = egui::Modifiers::COMMAND;
+    node5.click_modifiers(Modifiers::COMMAND);
     harness.run();
 
     let node10 = harness.get_by_label("entity10");
-    node10.key_down(Key::Command);
-    node10.key_down(Key::Shift);
-    node10.click();
-    node10.key_up(Key::Command);
-    node10.key_up(Key::Shift);
+    node10.click_modifiers(Modifiers::SHIFT | Modifiers::COMMAND);
 
-    //TODO(emilk/egui#5693): remove this when https://github.com/emilk/egui/pull/5693 is landed/released
-    harness.input_mut().modifiers = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
     harness.run();
 
     harness.snapshot("range_selection_in_blueprint_tree");

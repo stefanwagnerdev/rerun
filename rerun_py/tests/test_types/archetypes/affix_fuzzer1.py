@@ -47,7 +47,7 @@ class AffixFuzzer1(Archetype):
         fuzz1020: datatypes.AffixFuzzer20Like,
         fuzz1021: datatypes.AffixFuzzer21Like,
         fuzz1022: datatypes.AffixFuzzer22Like,
-    ):
+    ) -> None:
         """Create a new instance of the AffixFuzzer1 archetype."""
 
         # You can define your own __init__ function as a member of AffixFuzzer1Ext in affix_fuzzer1_ext.py
@@ -252,41 +252,49 @@ class AffixFuzzer1(Archetype):
             return ComponentColumnList([])
 
         kwargs = {
-            "fuzz1001": fuzz1001,
-            "fuzz1002": fuzz1002,
-            "fuzz1003": fuzz1003,
-            "fuzz1004": fuzz1004,
-            "fuzz1005": fuzz1005,
-            "fuzz1006": fuzz1006,
-            "fuzz1007": fuzz1007,
-            "fuzz1008": fuzz1008,
-            "fuzz1009": fuzz1009,
-            "fuzz1010": fuzz1010,
-            "fuzz1011": fuzz1011,
-            "fuzz1012": fuzz1012,
-            "fuzz1013": fuzz1013,
-            "fuzz1014": fuzz1014,
-            "fuzz1015": fuzz1015,
-            "fuzz1016": fuzz1016,
-            "fuzz1017": fuzz1017,
-            "fuzz1018": fuzz1018,
-            "fuzz1019": fuzz1019,
-            "fuzz1020": fuzz1020,
-            "fuzz1021": fuzz1021,
-            "fuzz1022": fuzz1022,
+            "AffixFuzzer1:fuzz1001": fuzz1001,
+            "AffixFuzzer1:fuzz1002": fuzz1002,
+            "AffixFuzzer1:fuzz1003": fuzz1003,
+            "AffixFuzzer1:fuzz1004": fuzz1004,
+            "AffixFuzzer1:fuzz1005": fuzz1005,
+            "AffixFuzzer1:fuzz1006": fuzz1006,
+            "AffixFuzzer1:fuzz1007": fuzz1007,
+            "AffixFuzzer1:fuzz1008": fuzz1008,
+            "AffixFuzzer1:fuzz1009": fuzz1009,
+            "AffixFuzzer1:fuzz1010": fuzz1010,
+            "AffixFuzzer1:fuzz1011": fuzz1011,
+            "AffixFuzzer1:fuzz1012": fuzz1012,
+            "AffixFuzzer1:fuzz1013": fuzz1013,
+            "AffixFuzzer1:fuzz1014": fuzz1014,
+            "AffixFuzzer1:fuzz1015": fuzz1015,
+            "AffixFuzzer1:fuzz1016": fuzz1016,
+            "AffixFuzzer1:fuzz1017": fuzz1017,
+            "AffixFuzzer1:fuzz1018": fuzz1018,
+            "AffixFuzzer1:fuzz1019": fuzz1019,
+            "AffixFuzzer1:fuzz1020": fuzz1020,
+            "AffixFuzzer1:fuzz1021": fuzz1021,
+            "AffixFuzzer1:fuzz1022": fuzz1022,
         }
         columns = []
 
         for batch in batches:
             arrow_array = batch.as_arrow_array()
 
-            # For primitive arrays, we infer partition size from the input shape.
-            if pa.types.is_primitive(arrow_array.type):
-                param = kwargs[batch.component_descriptor().archetype_field_name]  # type: ignore[index]
+            # For primitive arrays and fixed size list arrays, we infer partition size from the input shape.
+            if pa.types.is_primitive(arrow_array.type) or pa.types.is_fixed_size_list(arrow_array.type):
+                param = kwargs[batch.component_descriptor().component]  # type: ignore[index]
                 shape = np.shape(param)  # type: ignore[arg-type]
+                elem_flat_len = int(np.prod(shape[1:])) if len(shape) > 1 else 1  # type: ignore[redundant-expr,misc]
 
-                batch_length = shape[1] if len(shape) > 1 else 1
-                num_rows = shape[0] if len(shape) >= 1 else 1
+                if pa.types.is_fixed_size_list(arrow_array.type) and arrow_array.type.list_size == elem_flat_len:
+                    # If the product of the last dimensions of the shape are equal to the size of the fixed size list array,
+                    # we have `num_rows` single element batches (each element is a fixed sized list).
+                    # (This should have been already validated by conversion to the arrow_array)
+                    batch_length = 1
+                else:
+                    batch_length = shape[1] if len(shape) > 1 else 1  # type: ignore[redundant-expr,misc]
+
+                num_rows = shape[0] if len(shape) >= 1 else 1  # type: ignore[redundant-expr,misc]
                 sizes = batch_length * np.ones(num_rows)
             else:
                 # For non-primitive types, default to partitioning each element separately.

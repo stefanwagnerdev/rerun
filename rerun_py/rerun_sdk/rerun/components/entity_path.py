@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -22,11 +21,10 @@ class EntityPath(datatypes.EntityPath, ComponentMixin):
     # You can define your own __init__ function as a member of EntityPathExt in entity_path_ext.py
 
     # Note: there are no fields here because EntityPath delegates to datatypes.EntityPath
-    pass
 
 
 class EntityPathBatch(datatypes.EntityPathBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.EntityPath")
+    _COMPONENT_TYPE: str = "rerun.components.EntityPath"
 
 
 # This is patched in late to avoid circular dependencies.

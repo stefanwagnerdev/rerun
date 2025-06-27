@@ -64,23 +64,26 @@ namespace rerun::archetypes {
     ///     rec.log("segmentation/image", rerun::SegmentationImage(data.data(), {WIDTH, HEIGHT}));
     /// }
     /// ```
+    ///
+    /// ⚠ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    ///
     struct AnnotationContext {
         /// List of class descriptions, mapping class indices to class names, colors etc.
         std::optional<ComponentBatch> context;
 
       public:
-        static constexpr const char IndicatorComponentName[] =
+        static constexpr const char IndicatorComponentType[] =
             "rerun.components.AnnotationContextIndicator";
 
         /// Indicator component, used to identify the archetype when converting to a list of components.
-        using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentName>;
+        using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentType>;
         /// The name of the archetype as used in `ComponentDescriptor`s.
         static constexpr const char ArchetypeName[] = "rerun.archetypes.AnnotationContext";
 
         /// `ComponentDescriptor` for the `context` field.
         static constexpr auto Descriptor_context = ComponentDescriptor(
-            ArchetypeName, "context",
-            Loggable<rerun::components::AnnotationContext>::Descriptor.component_name
+            ArchetypeName, "AnnotationContext:context",
+            Loggable<rerun::components::AnnotationContext>::ComponentType
         );
 
       public:

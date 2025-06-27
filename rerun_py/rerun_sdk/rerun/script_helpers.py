@@ -51,7 +51,7 @@ def script_add_args(parser: ArgumentParser) -> None:
         action="store_true",
         help="Serve a web viewer (WARNING: experimental feature)",
     )
-    parser.add_argument("--url", type=str, default=None, help="Connect to this HTTP(S) URL")
+    parser.add_argument("--url", type=str, default=None, help="Connect to this Rerun URL")
     parser.add_argument("--save", type=str, default=None, help="Save data to a .rrd file at this path")
     parser.add_argument(
         "-o",
@@ -104,19 +104,19 @@ def script_setup(
 
     rec: RecordingStream = rr.get_global_data_recording()  # type: ignore[assignment]
 
-    # NOTE: mypy thinks these methods don't exist because they're monkey-patched.
     if args.stdout:
-        rec.stdout(default_blueprint=default_blueprint)  # type: ignore[attr-defined]
+        rec.stdout(default_blueprint=default_blueprint)
     elif args.serve:
-        rec.serve(default_blueprint=default_blueprint)  # type: ignore[attr-defined]
+        connect_to = rec.serve_grpc(default_blueprint=default_blueprint)
+        rr.serve_web_viewer(open_browser=True, connect_to=connect_to)
     elif args.connect:
         # Send logging data to separate `rerun` process.
         # You can omit the argument to connect to the default URL.
-        rec.connect_grpc(args.url, default_blueprint=default_blueprint)  # type: ignore[attr-defined]
+        rec.connect_grpc(args.url, default_blueprint=default_blueprint)
     elif args.save is not None:
-        rec.save(args.save, default_blueprint=default_blueprint)  # type: ignore[attr-defined]
+        rec.save(args.save, default_blueprint=default_blueprint)
     elif not args.headless:
-        rec.spawn(default_blueprint=default_blueprint)  # type: ignore[attr-defined]
+        rec.spawn(default_blueprint=default_blueprint)
 
     return rec
 

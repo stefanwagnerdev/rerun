@@ -1,15 +1,16 @@
-use egui::{NumExt as _, Vec2};
+use egui::{Button, NumExt as _, Vec2};
 
 use re_renderer::renderer::ColormappedTexture;
+use re_ui::icons;
 use re_viewer_context::{
-    gpu_bridge::{self, image_to_gpu},
     ColormapWithRange, ImageInfo, ImageStatsCache, UiLayout, ViewerContext,
+    gpu_bridge::{self, image_to_gpu},
 };
 
 /// Show a button letting the user copy the image
 pub fn copy_image_button_ui(ui: &mut egui::Ui, image: &ImageInfo, data_range: egui::Rangef) {
     if ui
-        .button("Copy image")
+        .add(Button::image_and_text(icons::COPY.as_image(), "Copy image"))
         .on_hover_text("Copy image to system clipboard")
         .clicked()
     {

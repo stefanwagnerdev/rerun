@@ -8,7 +8,7 @@ use anyhow::Context as _;
 use web_time::Instant;
 
 use re_renderer::{
-    device_caps::DeviceCaps, view_builder::ViewBuilder, RenderConfig, RenderContext,
+    RenderConfig, RenderContext, device_caps::DeviceCaps, view_builder::ViewBuilder,
 };
 
 use winit::{
@@ -78,7 +78,7 @@ pub struct Time {
 }
 
 impl Time {
-    pub fn seconds_since_startup(&self) -> f32 {
+    pub fn secs_since_startup(&self) -> f32 {
         self.start_time.elapsed().as_secs_f32()
     }
 }
@@ -128,15 +128,13 @@ impl<E: Example + 'static> Application<E> {
 
         let device_caps = DeviceCaps::from_adapter(&adapter)?;
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: None,
-                    required_features: wgpu::Features::empty(),
-                    required_limits: device_caps.limits(),
-                    memory_hints: Default::default(),
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: None,
+                required_features: wgpu::Features::empty(),
+                required_limits: device_caps.limits(),
+                memory_hints: Default::default(),
+                trace: wgpu::Trace::Off,
+            })
             .await
             .context("failed to create device")?;
 
@@ -287,6 +285,7 @@ impl<E: Example + 'static> Application<E> {
                         .map(|d| d.command_buffer)
                         .chain(std::iter::once(composite_cmd_encoder.finish())),
                 );
+                self.window.pre_present_notify();
                 frame.present();
 
                 // Note that this measures time spent on CPU, not GPU
@@ -301,7 +300,7 @@ impl<E: Example + 'static> Application<E> {
 
                 // TODO(andreas): Display a median over n frames and while we're on it also stddev thereof.
                 // Do it only every second.
-                let time_until_next_report = 1.0 - self.time.seconds_since_startup().fract();
+                let time_until_next_report = 1.0 - self.time.secs_since_startup().fract();
                 if time_until_next_report - time_passed.as_secs_f32() < 0.0 {
                     let time_info_str = format!(
                         "{:.2} ms ({:.2} fps)",
@@ -399,7 +398,7 @@ pub fn start<E: Example + 'static>() {
             });
 
         // TODO(emilk): port this to the winit 0.30 API, using maybe https://docs.rs/winit/latest/winit/platform/web/trait.EventLoopExtWebSys.html ?
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let window = event_loop.create_window(window).unwrap();
 
         use winit::platform::web::WindowExtWebSys;

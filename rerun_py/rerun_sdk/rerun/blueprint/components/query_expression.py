@@ -8,7 +8,6 @@ from __future__ import annotations
 from ... import datatypes
 from ..._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -27,17 +26,18 @@ class QueryExpression(datatypes.Utf8, ComponentMixin):
     The `/**` suffix matches the whole subtree, i.e. self and any child, recursively
     (`/world/**` matches both `/world` and `/world/car/driver`).
     Other uses of `*` are not (yet) supported.
+
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
     """
 
     _BATCH_TYPE = None
     # You can define your own __init__ function as a member of QueryExpressionExt in query_expression_ext.py
 
     # Note: there are no fields here because QueryExpression delegates to datatypes.Utf8
-    pass
 
 
 class QueryExpressionBatch(datatypes.Utf8Batch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.blueprint.components.QueryExpression")
+    _COMPONENT_TYPE: str = "rerun.blueprint.components.QueryExpression"
 
 
 # This is patched in late to avoid circular dependencies.

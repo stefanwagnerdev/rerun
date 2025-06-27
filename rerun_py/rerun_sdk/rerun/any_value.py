@@ -4,6 +4,7 @@ from typing import Any
 
 import numpy as np
 import pyarrow as pa
+from pyarrow import ArrowInvalid
 
 from rerun._baseclasses import ComponentDescriptor
 
@@ -42,12 +43,12 @@ class AnyBatchValue(ComponentBatchLike):
         will be dropped, and a warning will be sent to the log.
 
         If you are want to inspect how your component will be converted to the
-        underlying arrow code, the following snippet is what is happening
-        internally:
+        underlying arrow code, we first attempt to cast it directly to a pyarrow
+        array. Failing this, we call
 
         ```
-        np_value = np.atleast_1d(np.array(value, copy=False))
-        pa_value = pa.array(value)
+        pa_scalar = pa.scalar(value)
+        pa_value = pa.array(pa_scalar)
         ```
 
         Parameters
@@ -77,19 +78,52 @@ class AnyBatchValue(ComponentBatchLike):
             elif hasattr(value, "as_arrow_array"):
                 self.pa_array = value.as_arrow_array()
             else:
-                if np_type is not None:
+                if pa_type is not None:
                     if value is None:
                         value = []
-                    np_value = np.atleast_1d(np.array(value, copy=False, dtype=np_type))
-                    self.pa_array = pa.array(np_value, type=pa_type)
+                    # Special case: strings are iterables so pyarrow will not
+                    # handle them properly
+                    if not isinstance(value, (str, bytes)):
+                        try:
+                            self.pa_array = pa.array(value, type=pa_type)
+                        except (ArrowInvalid, TypeError):
+                            pass
+                    if self.pa_array is None:
+                        try:
+                            pa_scalar = pa.scalar(value, type=pa_type)
+                            self.pa_array = pa.array([pa_scalar], type=pa_type)
+                        except (ArrowInvalid, TypeError):
+                            pass
+                    if self.pa_array is None:
+                        # Fall back - use numpy
+                        np_value = np.atleast_1d(np.asarray(value, dtype=np_type))
+                        self.pa_array = pa.array(np_value, type=pa_type)
                 else:
                     if value is None:
                         if not drop_untyped_nones:
                             raise ValueError("Cannot convert None to arrow array. Type is unknown.")
                     else:
-                        np_value = np.atleast_1d(np.array(value, copy=False))
-                        self.pa_array = pa.array(np_value)
-                        ANY_VALUE_TYPE_REGISTRY[descriptor] = (np_value.dtype, self.pa_array.type)
+                        # This should handle most non-scalar values, but we have to
+                        # treat str and bytes special because they are iterable
+                        if not isinstance(value, (str, bytes)) and value is not None:
+                            try:
+                                self.pa_array = pa.array(value)
+                                ANY_VALUE_TYPE_REGISTRY[descriptor] = (None, self.pa_array.type)
+                            except (ArrowInvalid, TypeError):
+                                pass
+                        if self.pa_array is None:
+                            try:
+                                pa_scalar = pa.scalar(value)
+                                self.pa_array = pa.array([pa_scalar])
+                                ANY_VALUE_TYPE_REGISTRY[descriptor] = (None, self.pa_array.type)
+                            except (ArrowInvalid, TypeError):
+                                pass
+                        if self.pa_array is None:
+                            # Fall back - use numpy which handles a wide variety of lists, tuples,
+                            # and mixtures of them and will turn into a well formed array
+                            np_value = np.atleast_1d(np.asarray(value))
+                            self.pa_array = pa.array(np_value)
+                            ANY_VALUE_TYPE_REGISTRY[descriptor] = (np_value.dtype, self.pa_array.type)
 
     def is_valid(self) -> bool:
         return self.pa_array is not None
@@ -102,7 +136,10 @@ class AnyBatchValue(ComponentBatchLike):
 
     @classmethod
     def column(
-        cls, descriptor: str | ComponentDescriptor, value: Any, drop_untyped_nones: bool = True
+        cls,
+        descriptor: str | ComponentDescriptor,
+        value: Any,
+        drop_untyped_nones: bool = True,
     ) -> ComponentColumn:
         """
         Construct a new column-oriented AnyBatchValue.
@@ -146,7 +183,7 @@ class AnyBatchValue(ComponentBatchLike):
 
         """
         inst = cls(descriptor, value, drop_untyped_nones)
-        return ComponentColumn(inst)
+        return ComponentColumn(descriptor, inst)
 
 
 class AnyValues(AsComponents):
@@ -216,13 +253,22 @@ class AnyValues(AsComponents):
         """
         global ANY_VALUE_TYPE_REGISTRY
 
-        self.component_batches = list()
+        self.component_batches = []
 
         with catch_and_log_exceptions(self.__class__.__name__):
             for name, value in kwargs.items():
                 batch = AnyBatchValue(name, value, drop_untyped_nones=drop_untyped_nones)
                 if batch.is_valid():
                     self.component_batches.append(DescribedComponentBatch(batch, batch.descriptor))
+
+    def with_field(
+        self, descriptor: str | ComponentDescriptor, value: Any, drop_untyped_nones: bool = True
+    ) -> AnyValues:
+        """Adds an `AnyValueBatch` to this `AnyValues` bundle."""
+        batch = AnyBatchValue(descriptor, value, drop_untyped_nones=drop_untyped_nones)
+        if batch.is_valid():
+            self.component_batches.append(DescribedComponentBatch(batch, batch.descriptor))
+        return self
 
     def as_component_batches(self) -> list[DescribedComponentBatch]:
         return self.component_batches
@@ -279,4 +325,6 @@ class AnyValues(AsComponents):
 
         """
         inst = cls(drop_untyped_nones, **kwargs)
-        return ComponentColumnList([ComponentColumn(batch) for batch in inst.component_batches])
+        return ComponentColumnList([
+            ComponentColumn(batch.component_descriptor(), batch) for batch in inst.component_batches
+        ])

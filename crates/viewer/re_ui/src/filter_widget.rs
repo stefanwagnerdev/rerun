@@ -1,10 +1,10 @@
 use std::ops::Range;
 
 use egui::{Color32, NumExt as _, Widget as _};
-use itertools::Itertools;
+use itertools::Itertools as _;
 use smallvec::SmallVec;
 
-use crate::{list_item, UiExt as _};
+use crate::{UiExt as _, icons, list_item};
 
 /// State for the filter widget when it is toggled on.
 #[derive(Debug, Clone)]
@@ -79,9 +79,18 @@ impl FilterState {
             .map(|state| state.filter_query.as_str())
     }
 
-    /// Return the current session ID of the filter widget, if active.
+    /// Return the current session ID of the filter widget.
+    ///
+    /// This returns `Some` value iff the filter is active AND the query is non-empty.
+    ///
+    /// Rationale: this is primarily used to keep track of a different collapse state while a search
+    /// session is ongoing. When the filter is active but the query is empty, we display all
+    /// entities without filtering, so the collapse state is the same as when the filter is
+    /// inactive.
     pub fn session_id(&self) -> Option<egui::Id> {
-        self.inner_state.as_ref().map(|state| state.session_id)
+        self.inner_state
+            .as_ref()
+            .and_then(|state| (!state.filter_query.is_empty()).then_some(state.session_id))
     }
 
     /// Return a filter matcher for the current query.
@@ -89,22 +98,22 @@ impl FilterState {
         FilterMatcher::new(self.query())
     }
 
-    /// Display the filter widget.
+    /// Display the filter widget as a section title.
+    ///
+    /// In this mode, the UI serves primarily as a section title. The filter is active when
+    /// explicitly turned on using the search button, which creates a session that is ended by
+    /// clicking the close button.
     ///
     /// Note: this uses [`egui::Ui::available_width`] to determine the location of the right-aligned
     /// search button, as usual for [`list_item::ListItem`]-based widgets.
-    pub fn ui(
+    pub fn section_title_ui(
         &mut self,
         ui: &mut egui::Ui,
         section_title: impl Into<egui::WidgetText>,
     ) -> Option<egui::Response> {
-        let mut button_clicked = false;
+        let mut toggle_search_clicked = false;
 
-        let icon = if self.inner_state.is_none() {
-            &crate::icons::SEARCH
-        } else {
-            &crate::icons::CLOSE
-        };
+        let is_searching = self.inner_state.is_some();
 
         // precompute the title layout such that we know the size we need for the list item content
         let section_title = section_title.into();
@@ -155,14 +164,26 @@ impl FilterState {
                     }
                 })
                 .with_content_width(text_width)
-                .action_button(icon, || {
-                    button_clicked = true;
-                }),
+                .action_button(
+                    if is_searching {
+                        &icons::CLOSE
+                    } else {
+                        &icons::SEARCH
+                    },
+                    if is_searching {
+                        "Stop search"
+                    } else {
+                        "Search"
+                    },
+                    || {
+                        toggle_search_clicked = true;
+                    },
+                ),
             );
         });
 
         // defer button handling because we can't mutably borrow `self` in both closures above
-        if button_clicked {
+        if toggle_search_clicked {
             if self.inner_state.is_none() {
                 self.activate("");
             } else {
@@ -171,6 +192,68 @@ impl FilterState {
         }
 
         title_response
+    }
+
+    /// Display the filter widget as a search field.
+    ///
+    /// In this mode, the filter is active as soon as the query is non-empty. The session remains
+    /// active until the query is cleared.
+    pub fn search_field_ui(&mut self, ui: &mut egui::Ui) {
+        let inner_state = self.inner_state.get_or_insert_with(Default::default);
+
+        let textedit_id = ui.id().with("textedit");
+        let response = ui.ctx().read_response(textedit_id);
+
+        let visuals = response
+            .as_ref()
+            .map(|r| ui.style().interact(r))
+            .unwrap_or(&ui.visuals().widgets.inactive);
+
+        let selection_stroke = ui.visuals().selection.stroke;
+        let stroke = if response.is_some_and(|r| r.has_focus()) {
+            selection_stroke
+        } else {
+            let mut stroke = visuals.bg_stroke;
+            stroke.width = selection_stroke.width;
+            stroke
+        };
+
+        egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(3, 2))
+            .fill(ui.visuals().extreme_bg_color)
+            .stroke(stroke)
+            .corner_radius(visuals.corner_radius)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.set_height(19.0);
+
+                    ui.add_enabled_ui(false, |ui| ui.small_icon_button(&icons::SEARCH, "Search"));
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if !inner_state.filter_query.is_empty()
+                            && ui.small_icon_button(&icons::CLOSE, "Close").clicked()
+                        {
+                            *inner_state = Default::default();
+                        }
+
+                        ui.add(
+                            egui::TextEdit::singleline(&mut inner_state.filter_query)
+                                .id(textedit_id)
+                                .frame(false)
+                                .hint_text("Search for entity…")
+                                .desired_width(ui.available_width()),
+                        )
+                    });
+                });
+            });
+
+        if self
+            .inner_state
+            .as_ref()
+            .is_some_and(|state| state.filter_query.is_empty())
+        {
+            self.inner_state = None;
+        }
     }
 }
 
@@ -199,31 +282,15 @@ impl FilterMatcher {
         self.keywords.is_some()
     }
 
-    /// Is the filter set to match everything?
-    ///
-    /// Can be used by client code to short-circuit more expansive matching logic.
-    pub fn matches_everything(&self) -> bool {
-        self.keywords.is_none()
-    }
-
-    /// Is the filter set to match nothing?
-    ///
-    /// Can be used by client code to short-circuit more expansive matching logic.
-    pub fn matches_nothing(&self) -> bool {
-        self.keywords
-            .as_ref()
-            .is_some_and(|keywords| keywords.is_empty())
-    }
-
     /// Match a path and return the highlight ranges if any.
     ///
     /// `None`: the filter is active, but the path didn't match the keyword
     /// `Some(ranges)`: either the filter is inactive (i.e., it matches everything), or it is active
-    /// and all keywords matched at least once.
+    /// all keywords matched at least once (including when there are no keywords at all).
     pub fn match_path<'a>(&self, path: impl IntoIterator<Item = &'a str>) -> Option<PathRanges> {
         match self.keywords.as_deref() {
-            None => Some(PathRanges::default()),
-            Some([]) => None,
+            None | Some([]) => Some(PathRanges::default()),
+
             Some(keywords) => {
                 let path = path.into_iter().map(str::to_lowercase).collect_vec();
 
@@ -376,7 +443,10 @@ impl PathRanges {
     }
 
     /// Remove the ranges for the given part and (if any) return them sorted and merged.
-    pub fn remove(&mut self, part_index: usize) -> Option<impl Iterator<Item = Range<usize>>> {
+    pub fn remove(
+        &mut self,
+        part_index: usize,
+    ) -> Option<impl Iterator<Item = Range<usize>> + use<>> {
         self.ranges.remove(&part_index).map(MergeRanges::new)
     }
 

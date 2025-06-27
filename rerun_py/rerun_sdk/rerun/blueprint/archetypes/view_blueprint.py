@@ -21,7 +21,11 @@ __all__ = ["ViewBlueprint"]
 
 @define(str=False, repr=False, init=False)
 class ViewBlueprint(Archetype):
-    """**Archetype**: The description of a single view."""
+    """
+    **Archetype**: The description of a single view.
+
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    """
 
     def __init__(
         self: Any,
@@ -30,7 +34,7 @@ class ViewBlueprint(Archetype):
         display_name: datatypes.Utf8Like | None = None,
         space_origin: datatypes.EntityPathLike | None = None,
         visible: datatypes.BoolLike | None = None,
-    ):
+    ) -> None:
         """
         Create a new instance of the ViewBlueprint archetype.
 

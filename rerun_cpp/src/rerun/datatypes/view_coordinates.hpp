@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include "../component_descriptor.hpp"
 #include "../result.hpp"
 
 #include <array>
@@ -35,6 +34,9 @@ namespace rerun::datatypes {
     ///  * Left = 4
     ///  * Forward = 5
     ///  * Back = 6
+    ///
+    /// ⚠ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    ///
     struct ViewCoordinates {
         /// The directions of the [x, y, z] axes.
         std::array<uint8_t, 3> coordinates;
@@ -65,7 +67,7 @@ namespace rerun {
     /// \private
     template <>
     struct Loggable<datatypes::ViewCoordinates> {
-        static constexpr ComponentDescriptor Descriptor = "rerun.datatypes.ViewCoordinates";
+        static constexpr std::string_view ComponentType = "rerun.datatypes.ViewCoordinates";
 
         /// Returns the arrow data type this type corresponds to.
         static const std::shared_ptr<arrow::DataType>& arrow_datatype();

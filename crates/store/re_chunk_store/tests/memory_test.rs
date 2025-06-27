@@ -4,8 +4,8 @@
 #![cfg(test)]
 
 use std::sync::{
-    atomic::{AtomicUsize, Ordering::Relaxed},
     Arc,
+    atomic::{AtomicUsize, Ordering::Relaxed},
 };
 
 static LIVE_BYTES_GLOBAL: AtomicUsize = AtomicUsize::new(0);
@@ -69,18 +69,20 @@ fn memory_use<R>(run: impl Fn() -> R) -> (usize, usize) {
 // ----------------------------------------------------------------------------
 
 use re_chunk::{
-    external::crossbeam::channel::TryRecvError, ChunkBatcher, ChunkBatcherConfig, PendingRow,
+    ChunkBatcher, ChunkBatcherConfig, PendingRow, external::crossbeam::channel::TryRecvError,
 };
 use re_chunk_store::{ChunkStore, ChunkStoreConfig};
-use re_log_types::{TimePoint, TimeType, Timeline};
-use re_types::{components::Scalar, Component as _, Loggable};
+use re_log_types::{TimePoint, Timeline};
+use re_types::{Loggable as _, archetypes, components::Scalar};
 
 /// The memory overhead of storing many scalars in the store.
 #[test]
 fn scalar_memory_overhead() {
     re_log::setup_logging();
 
-    re_log::warn!("THIS TEST HAS TO ACCOUNT FOR THE MEMORY OF ALL RUNNING THREADS -- IT MUST BE RUN ON ITS OWN, WITH NO OTHER TESTS RUNNING IN PARALLEL: `cargo t --all-features -p re_chunk_store memory_tests -- scalar_memory_overhead`");
+    re_log::warn!(
+        "THIS TEST HAS TO ACCOUNT FOR THE MEMORY OF ALL RUNNING THREADS -- IT MUST BE RUN ON ITS OWN, WITH NO OTHER TESTS RUNNING IN PARALLEL: `cargo t --all-features -p re_chunk_store memory_tests -- scalar_memory_overhead`"
+    );
 
     const NUM_SCALARS: usize = 1024 * 1024;
 
@@ -98,13 +100,12 @@ fn scalar_memory_overhead() {
 
         for i in 0..NUM_SCALARS {
             let entity_path = re_log_types::entity_path!("scalar");
-            let timepoint =
-                TimePoint::default().with(Timeline::new("log_time", TimeType::Time), i as i64);
+            let timepoint = TimePoint::default().with(Timeline::log_time(), i as i64);
             let scalars = Scalar::to_arrow([Scalar::from(i as f64)]).unwrap();
 
             let row = PendingRow::new(
                 timepoint,
-                std::iter::once((Scalar::descriptor(), scalars)).collect(),
+                std::iter::once((archetypes::Scalars::descriptor_scalars(), scalars)).collect(),
             );
 
             batcher.push_row(entity_path.clone(), row);

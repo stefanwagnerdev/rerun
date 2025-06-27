@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Sequence, Union
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Union
 
 import numpy as np
 import numpy.typing as npt
@@ -16,7 +17,6 @@ from .. import datatypes
 from .._baseclasses import (
     BaseBatch,
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 from .line_strip2d_ext import LineStrip2DExt
@@ -43,7 +43,7 @@ class LineStrip2D(LineStrip2DExt, ComponentMixin):
 
     _BATCH_TYPE = None
 
-    def __init__(self: Any, points: LineStrip2DLike):
+    def __init__(self: Any, points: LineStrip2DLike) -> None:
         """Create a new instance of the LineStrip2D component."""
 
         # You can define your own __init__ function as a member of LineStrip2DExt in line_strip2d_ext.py
@@ -69,7 +69,7 @@ class LineStrip2DBatch(BaseBatch[LineStrip2DArrayLike], ComponentBatchMixin):
             metadata={},
         )
     )
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.LineStrip2D")
+    _COMPONENT_TYPE: str = "rerun.components.LineStrip2D"
 
     @staticmethod
     def _native_to_pa_array(data: LineStrip2DArrayLike, data_type: pa.DataType) -> pa.Array:

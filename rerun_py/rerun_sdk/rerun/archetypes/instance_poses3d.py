@@ -48,14 +48,17 @@ class InstancePoses3D(Archetype):
 
     rr.init("rerun_example_instance_pose3d_combined", spawn=True)
 
-    rr.set_time_sequence("frame", 0)
+    rr.set_time("frame", sequence=0)
 
     # Log a box and points further down in the hierarchy.
     rr.log("world/box", rr.Boxes3D(half_sizes=[[1.0, 1.0, 1.0]]))
-    rr.log("world/box/points", rr.Points3D(np.vstack([xyz.ravel() for xyz in np.mgrid[3 * [slice(-10, 10, 10j)]]]).T))
+    lin = np.linspace(-10, 10, 10)
+    z, y, x = np.meshgrid(lin, lin, lin, indexing="ij")
+    point_grid = np.vstack([x.flatten(), y.flatten(), z.flatten()]).T
+    rr.log("world/box/points", rr.Points3D(point_grid))
 
-    for i in range(0, 180):
-        rr.set_time_sequence("frame", i)
+    for i in range(180):
+        rr.set_time("frame", sequence=i)
 
         # Log a regular transform which affects both the box and the points.
         rr.log("world/box", rr.Transform3D(rotation_axis_angle=rr.RotationAxisAngle([0, 0, 1], angle=rr.Angle(deg=i * 2))))
@@ -83,7 +86,7 @@ class InstancePoses3D(Archetype):
         quaternions: datatypes.QuaternionArrayLike | None = None,
         scales: datatypes.Vec3DArrayLike | None = None,
         mat3x3: datatypes.Mat3x3ArrayLike | None = None,
-    ):
+    ) -> None:
         """
         Create a new instance of the InstancePoses3D archetype.
 
@@ -234,24 +237,32 @@ class InstancePoses3D(Archetype):
             return ComponentColumnList([])
 
         kwargs = {
-            "translations": translations,
-            "rotation_axis_angles": rotation_axis_angles,
-            "quaternions": quaternions,
-            "scales": scales,
-            "mat3x3": mat3x3,
+            "InstancePoses3D:translations": translations,
+            "InstancePoses3D:rotation_axis_angles": rotation_axis_angles,
+            "InstancePoses3D:quaternions": quaternions,
+            "InstancePoses3D:scales": scales,
+            "InstancePoses3D:mat3x3": mat3x3,
         }
         columns = []
 
         for batch in batches:
             arrow_array = batch.as_arrow_array()
 
-            # For primitive arrays, we infer partition size from the input shape.
-            if pa.types.is_primitive(arrow_array.type):
-                param = kwargs[batch.component_descriptor().archetype_field_name]  # type: ignore[index]
+            # For primitive arrays and fixed size list arrays, we infer partition size from the input shape.
+            if pa.types.is_primitive(arrow_array.type) or pa.types.is_fixed_size_list(arrow_array.type):
+                param = kwargs[batch.component_descriptor().component]  # type: ignore[index]
                 shape = np.shape(param)  # type: ignore[arg-type]
+                elem_flat_len = int(np.prod(shape[1:])) if len(shape) > 1 else 1  # type: ignore[redundant-expr,misc]
 
-                batch_length = shape[1] if len(shape) > 1 else 1
-                num_rows = shape[0] if len(shape) >= 1 else 1
+                if pa.types.is_fixed_size_list(arrow_array.type) and arrow_array.type.list_size == elem_flat_len:
+                    # If the product of the last dimensions of the shape are equal to the size of the fixed size list array,
+                    # we have `num_rows` single element batches (each element is a fixed sized list).
+                    # (This should have been already validated by conversion to the arrow_array)
+                    batch_length = 1
+                else:
+                    batch_length = shape[1] if len(shape) > 1 else 1  # type: ignore[redundant-expr,misc]
+
+                num_rows = shape[0] if len(shape) >= 1 else 1  # type: ignore[redundant-expr,misc]
                 sizes = batch_length * np.ones(num_rows)
             else:
                 # For non-primitive types, default to partitioning each element separately.

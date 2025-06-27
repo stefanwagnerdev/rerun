@@ -2,9 +2,9 @@ use re_chunk_store::RowId;
 use re_log_types::{EntityPath, TimePoint, Timeline};
 use re_view_spatial::SpatialView3D;
 use re_viewer_context::test_context::TestContext;
-use re_viewer_context::{RecommendedView, ViewClass, ViewId};
-use re_viewport_blueprint::test_context_ext::TestContextExt;
+use re_viewer_context::{RecommendedView, ViewClass as _, ViewId};
 use re_viewport_blueprint::ViewBlueprint;
+use re_viewport_blueprint::test_context_ext::TestContextExt as _;
 
 #[test]
 pub fn test_transform_hierarchy() {
@@ -127,7 +127,7 @@ pub fn test_transform_hierarchy() {
                 builder.with_archetype(
                     RowId::new(),
                     [(timeline_step, 0)],
-                    &re_types::archetypes::Asset3D::from_file(&obj_path).unwrap(),
+                    &re_types::archetypes::Asset3D::from_file_path(&obj_path).unwrap(),
                 )
             });
         }
@@ -237,6 +237,7 @@ fn run_view_ui_and_save_snapshot(
         });
         harness.run_steps(8);
 
+        let mut success = true;
         for time in 0..=7 {
             let name = format!("{name}_{}_{time}", timeline.name());
 
@@ -247,15 +248,16 @@ fn run_view_ui_and_save_snapshot(
 
             harness.run_steps(8);
 
-            let broken_percent_threshold = 0.0036;
+            let broken_pixels_fraction = 0.0036;
             let num_pixels = (size.x * size.y).ceil() as u64;
 
             use re_viewer_context::test_context::HarnessExt as _;
-            harness.snapshot_with_broken_pixels_threshold(
+            success = harness.try_snapshot_with_broken_pixels_threshold(
                 &name,
                 num_pixels,
-                broken_percent_threshold,
+                broken_pixels_fraction,
             );
         }
+        assert!(success, "one or more snapshots failed");
     }
 }

@@ -18,7 +18,7 @@ workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
-[package.metadata.cargo-machete]
+[package.metadata.cargo-shear]
 ignored = [
   "num-traits", # Needed for `num-derive`'s macros to work.
   "half",       # Needed so that `fixed` is pinned at the right version.
@@ -31,7 +31,6 @@ default = []
 ## Enable (de)serialization using serde.
 serde = [
   "dep:serde",
-  "dep:serde_bytes",
   "fixed/serde",
   "re_build_info/serde",
   "re_string_interner/serde",
@@ -55,10 +54,7 @@ re_types_core.workspace = true
 
 # External
 ahash.workspace = true
-anyhow.workspace = true
 arrow = { workspace = true, features = ["ipc"] }
-arrow2 = { workspace = true, features = ["arrow", "io_ipc"] }
-backtrace.workspace = true
 bytemuck.workspace = true
 clean-path.workspace = true
 document-features.workspace = true
@@ -67,13 +63,13 @@ fixed = { workspace = true, default-features = false }
 # we keep it as a direct dependency to ensure it stays pinned to the right version
 half.workspace = true
 itertools.workspace = true
+jiff.workspace = true
 natord.workspace = true
 nohash-hasher.workspace = true
 num-derive.workspace = true
 num-traits.workspace = true
 static_assertions.workspace = true
 thiserror.workspace = true
-time = { workspace = true, features = ["formatting", "macros", "local-offset"] }
 typenum.workspace = true
 uuid = { workspace = true, features = ["serde", "v4", "js"] }
 web-time.workspace = true
@@ -81,7 +77,6 @@ web-time.workspace = true
 
 # Optional dependencies:
 serde = { workspace = true, optional = true, features = ["derive", "rc"] }
-serde_bytes = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion.workspace = true

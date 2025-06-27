@@ -3,34 +3,31 @@ from __future__ import annotations
 import functools
 import random
 import sys
-import warnings
 from typing import Any, Callable, TypeVar, cast
 from uuid import UUID
 
 import numpy as np
 
-__version__ = "0.23.0-alpha.1+dev"
-__version_info__ = (0, 23, 0, "alpha.1")
+__version__ = "0.24.0-alpha.1+dev"
+__version_info__ = (0, 24, 0, "alpha.1")
 
-if sys.version_info < (3, 9):
-    warnings.warn(
-        "Python 3.8 is past EOL (https://devguide.python.org/versions/). Rerun version 0.21 will drop support/testing of Python 3.8.",
-        DeprecationWarning,
-    )
+
+if sys.version_info < (3, 9):  # noqa: UP036
+    raise RuntimeError("Rerun SDK requires Python 3.9 or later.")
+
 
 # =====================================
 # API RE-EXPORTS
 # Important: always us the `import _ as _` format to make it explicit to type-checkers that these are public APIs.
 # Background: https://github.com/microsoft/pyright/blob/1.1.365/docs/typed-libraries.md#library-interface
 #
-import rerun_bindings as bindings  # type: ignore[attr-defined]
+import rerun_bindings as bindings
 
 from . import (
     blueprint as blueprint,
+    catalog as catalog,
     dataframe as dataframe,
     experimental as experimental,
-    notebook as notebook,
-    remote as remote,
 )
 from ._baseclasses import (
     ComponentBatchLike as ComponentBatchLike,
@@ -49,12 +46,17 @@ from ._log import (
     IndicatorComponentBatch as IndicatorComponentBatch,
     escape_entity_path_part as escape_entity_path_part,
     log as log,
-    log_components as log_components,
     log_file_from_contents as log_file_from_contents,
     log_file_from_path as log_file_from_path,
     new_entity_path as new_entity_path,
 )
+from ._properties import (
+    send_property as send_property,
+    send_recording_name as send_recording_name,
+    send_recording_start_time_nanos as send_recording_start_time_nanos,
+)
 from ._send_columns import (
+    TimeColumn as TimeColumn,
     TimeNanosColumn as TimeNanosColumn,
     TimeSecondsColumn as TimeSecondsColumn,
     TimeSequenceColumn as TimeSequenceColumn,
@@ -75,6 +77,7 @@ from .archetypes import (
     Boxes3D as Boxes3D,
     Capsules3D as Capsules3D,
     Clear as Clear,
+    Cylinders3D as Cylinders3D,
     DepthImage as DepthImage,
     Ellipsoids3D as Ellipsoids3D,
     EncodedImage as EncodedImage,
@@ -90,15 +93,16 @@ from .archetypes import (
     Pinhole as Pinhole,
     Points2D as Points2D,
     Points3D as Points3D,
-    Scalar as Scalar,
+    Scalars as Scalars,
     SegmentationImage as SegmentationImage,
-    SeriesLine as SeriesLine,
-    SeriesPoint as SeriesPoint,
+    SeriesLines as SeriesLines,
+    SeriesPoints as SeriesPoints,
     Tensor as Tensor,
     TextDocument as TextDocument,
     TextLog as TextLog,
     Transform3D as Transform3D,
     VideoFrameReference as VideoFrameReference,
+    VideoStream as VideoStream,
     ViewCoordinates as ViewCoordinates,
 )
 from .archetypes.boxes2d_ext import (
@@ -117,6 +121,7 @@ from .components import (
     TensorDimensionIndexSelection as TensorDimensionIndexSelection,
     TextLogLevel as TextLogLevel,
     TransformRelation as TransformRelation,
+    VideoCodec as VideoCodec,
 )
 from .datatypes import (
     Angle as Angle,
@@ -147,9 +152,6 @@ from .memory import (
     MemoryRecording as MemoryRecording,
     memory_recording as memory_recording,
 )
-from .notebook import (
-    notebook_show as notebook_show,
-)
 from .recording_stream import (
     BinaryStream as BinaryStream,
     RecordingStream as RecordingStream,
@@ -172,23 +174,28 @@ from .script_helpers import (
     script_teardown as script_teardown,
 )
 from .sinks import (
-    connect as connect,
+    FileSink as FileSink,
+    GrpcSink as GrpcSink,
     connect_grpc as connect_grpc,
     disconnect as disconnect,
     save as save,
     send_blueprint as send_blueprint,
-    serve as serve,
+    send_recording as send_recording,
+    serve_grpc as serve_grpc,
     serve_web as serve_web,
+    set_sinks as set_sinks,
     spawn as spawn,
     stdout as stdout,
 )
 from .time import (
     disable_timeline as disable_timeline,
     reset_time as reset_time,
+    set_time as set_time,
     set_time_nanos as set_time_nanos,
     set_time_seconds as set_time_seconds,
     set_time_sequence as set_time_sequence,
 )
+from .web import serve_web_viewer as serve_web_viewer
 
 # =====================================
 # UTILITIES
@@ -202,54 +209,17 @@ should exit with this exit code.
 """
 
 
-def _init_recording_stream() -> None:
-    # Inject all relevant methods into the `RecordingStream` class.
-    # We need to do this from here to avoid circular import issues.
-
-    import sys
-    from inspect import getmembers, isfunction
-
-    from rerun.recording_stream import _patch as recording_stream_patch
-
-    recording_stream_patch(
-        [
-            binary_stream,
-            connect,
-            connect_grpc,
-            save,
-            stdout,
-            disconnect,
-            memory_recording,
-            serve,
-            spawn,
-            send_blueprint,
-            notebook_show,
-        ]
-        + [
-            set_time_sequence,
-            set_time_seconds,
-            set_time_nanos,
-            disable_timeline,
-            reset_time,
-            log,
-        ]
-        + [fn for name, fn in getmembers(sys.modules[__name__], isfunction) if name.startswith("log_")]
-    )
-
-
-_init_recording_stream()
-
-
 # TODO(#3793): defaulting recording_id to authkey should be opt-in
 def init(
     application_id: str,
     *,
     recording_id: str | UUID | None = None,
-    spawn: bool = False,
+    spawn: bool = False,  # noqa: F811
     init_logging: bool = True,
     default_enabled: bool = True,
     strict: bool | None = None,
     default_blueprint: BlueprintLike | None = None,
+    send_properties: bool = True,
 ) -> None:
     """
     Initialize the Rerun SDK with a user-chosen application id (name).
@@ -257,7 +227,7 @@ def init(
     You must call this function first in order to initialize a global recording.
     Without an active recording, all methods of the SDK will turn into no-ops.
 
-    For more advanced use cases, e.g. multiple recordings setups, see [`rerun.new_recording`][].
+    For more advanced use cases, e.g. multiple recordings setups, see [`rerun.RecordingStream`][].
 
     !!! Warning
         If you don't specify a `recording_id`, it will default to a random value that is generated once
@@ -308,7 +278,7 @@ def init(
         Spawn a Rerun Viewer and stream logging data to it.
         Short for calling `spawn` separately.
         If you don't call this, log events will be buffered indefinitely until
-        you call either `connect`, `show`, or `save`
+        you call either `connect_grpc`, `show`, or `save`
     default_enabled
         Should Rerun logging be on by default?
         Can be overridden with the RERUN env-var, e.g. `RERUN=on` or `RERUN=off`.
@@ -324,6 +294,8 @@ def init(
         already has an active blueprint, the new blueprint won't become active until the user
         clicks the "reset blueprint" button. If you want to activate the new blueprint
         immediately, instead use the [`rerun.send_blueprint`][] API.
+    send_properties
+            Immediately send the recording properties to the viewer (default: True)
 
     """
 
@@ -343,13 +315,13 @@ def init(
         recording_id = str(recording_id)
 
     if init_logging:
-        new_recording(
+        RecordingStream(
             application_id=application_id,
             recording_id=recording_id,
             make_default=True,
             make_thread_default=False,
-            spawn=False,
             default_enabled=default_enabled,
+            send_properties=send_properties,
         )
 
     if spawn:
@@ -395,7 +367,7 @@ def _register_on_fork() -> None:
     try:
         import os
 
-        os.register_at_fork(after_in_child=cleanup_if_forked_child)  # type: ignore[attr-defined]
+        os.register_at_fork(after_in_child=cleanup_if_forked_child)
     except AttributeError:
         # not defined on all OSes
         pass
@@ -435,7 +407,7 @@ def start_web_viewer_server(port: int = 0) -> None:
     Start an HTTP server that hosts the rerun web viewer.
 
     This only provides the web-server that makes the viewer available and
-    does not otherwise provide a rerun websocket server or facilitate any routing of
+    does not otherwise provide a rerun gRPC server or facilitate any routing of
     data.
 
     This is generally only necessary for application such as running a jupyter notebook
@@ -450,3 +422,53 @@ def start_web_viewer_server(port: int = 0) -> None:
     """
 
     bindings.start_web_viewer_server(port)
+
+
+def notebook_show(
+    *,
+    width: int | None = None,
+    height: int | None = None,
+    blueprint: BlueprintLike | None = None,  # noqa: F811
+    recording: RecordingStream | None = None,
+) -> None:
+    """
+    Output the Rerun viewer in a notebook using IPython [IPython.core.display.HTML][].
+
+    Any data logged to the recording after initialization will be sent directly to the viewer.
+
+    Note that this can be called at any point during cell execution. The call will block until the embedded
+    viewer is initialized and ready to receive data. Thereafter any log calls will immediately send data
+    to the viewer.
+
+    Parameters
+    ----------
+    width : int
+        The width of the viewer in pixels.
+    height : int
+        The height of the viewer in pixels.
+    blueprint : BlueprintLike
+        A blueprint object to send to the viewer.
+        It will be made active and set as the default blueprint in the recording.
+
+        Setting this is equivalent to calling [`rerun.send_blueprint`][] before initializing the viewer.
+    recording:
+        Specifies the [`rerun.RecordingStream`][] to use.
+        If left unspecified, defaults to the current active data recording, if there is one.
+        See also: [`rerun.init`][], [`rerun.set_global_data_recording`][].
+
+    """
+    try:
+        from .notebook import Viewer
+
+        Viewer(
+            width=width,
+            height=height,
+            blueprint=blueprint,
+            recording=recording,  # NOLINT
+        ).display()
+    except ImportError as e:
+        raise Exception("Could not import rerun_notebook. Please install `rerun-notebook`.") from e
+    except FileNotFoundError as e:
+        raise Exception(
+            "rerun_notebook package is missing widget assets. Please run `py-build-notebook` in your pixi env."
+        ) from e

@@ -10,8 +10,6 @@
 #![doc = document_features::document_features!()]
 //!
 
-// TODO(#6330): remove unwrap()
-#![allow(clippy::unwrap_used)]
 #![warn(missing_docs)] // Let's keep the this crate well-documented!
 
 // ----------------
@@ -26,40 +24,40 @@ mod spawn;
 // -------------
 // Public items:
 
-pub use spawn::{spawn, SpawnError, SpawnOptions};
+pub use spawn::{SpawnError, SpawnOptions, spawn};
 
 pub use self::recording_stream::{
-    forced_sink_path, RecordingStream, RecordingStreamBuilder, RecordingStreamError,
-    RecordingStreamResult,
+    RecordingStream, RecordingStreamBuilder, RecordingStreamError, RecordingStreamResult,
+    forced_sink_path,
 };
 
-/// The default port of a Rerun gRPC server.
-pub const DEFAULT_SERVER_PORT: u16 = 9876;
+/// The default port of a Rerun gRPC /proxy server.
+pub const DEFAULT_SERVER_PORT: u16 = re_uri::DEFAULT_PROXY_PORT;
 
-/// The default URL of a Rerun gRPC server.
+/// The default URL of a Rerun gRPC /proxy server.
 ///
 /// This isn't used to _host_ the server, only to _connect_ to it.
 pub const DEFAULT_CONNECT_URL: &str =
     const_format::concatcp!("rerun+http://127.0.0.1:", DEFAULT_SERVER_PORT, "/proxy");
 
-/// The default address of a Rerun TCP server which an SDK connects to.
+/// The default address of a Rerun gRPC server which an SDK connects to.
 #[deprecated(since = "0.22.0", note = "migrate to connect_grpc")]
 pub fn default_server_addr() -> std::net::SocketAddr {
     std::net::SocketAddr::from(([127, 0, 0, 1], DEFAULT_SERVER_PORT))
 }
 
-/// The default amount of time to wait for the TCP connection to resume during a flush
+/// The default amount of time to wait for the gRPC connection to resume during a flush
 #[allow(clippy::unnecessary_wraps)]
 pub fn default_flush_timeout() -> Option<std::time::Duration> {
     // NOTE: This is part of the SDK and meant to be used where we accept `Option<std::time::Duration>` values.
-    Some(std::time::Duration::from_secs(2))
+    Some(std::time::Duration::from_secs(3))
 }
 
 pub use re_log_types::{
-    entity_path, ApplicationId, EntityPath, EntityPathPart, Instance, StoreId, StoreKind,
+    ApplicationId, EntityPath, EntityPathPart, Instance, StoreId, StoreKind, entity_path,
 };
-
 pub use re_memory::MemoryLimit;
+pub use re_types::archetypes::RecordingProperties;
 
 pub use global::cleanup_if_forked_child;
 
@@ -83,10 +81,11 @@ impl crate::sink::LogSink for re_log_encoding::FileSink {
 /// This is how you select whether the log stream ends up
 /// sent over gRPC, written to file, etc.
 pub mod sink {
-    pub use crate::binary_stream_sink::{
-        BinaryStreamSink, BinaryStreamSinkError, BinaryStreamStorage,
+    pub use crate::binary_stream_sink::{BinaryStreamSink, BinaryStreamStorage};
+    pub use crate::log_sink::{
+        BufferedSink, CallbackSink, IntoMultiSink, LogSink, MemorySink, MemorySinkStorage,
+        MultiSink,
     };
-    pub use crate::log_sink::{BufferedSink, CallbackSink, LogSink, MemorySink, MemorySinkStorage};
 
     pub use crate::log_sink::GrpcSink;
 
@@ -105,15 +104,15 @@ pub mod log {
 
 /// Time-related types.
 pub mod time {
-    pub use re_log_types::{Time, TimeInt, TimePoint, TimeType, Timeline};
+    pub use re_log_types::{Duration, TimeCell, TimeInt, TimePoint, TimeType, Timeline, Timestamp};
 }
-pub use time::{Time, TimePoint, Timeline};
+pub use time::{TimeCell, TimePoint, Timeline};
 
-pub use re_types_core::{
+pub use re_types::{
     Archetype, ArchetypeName, AsComponents, Component, ComponentBatch, ComponentDescriptor,
-    ComponentName, DatatypeName, DeserializationError, DeserializationResult,
-    GenericIndicatorComponent, Loggable, LoggableBatch, NamedIndicatorComponent,
-    SerializationError, SerializationResult, SerializedComponentBatch, SerializedComponentColumn,
+    ComponentType, DatatypeName, DeserializationError, DeserializationResult,
+    GenericIndicatorComponent, Loggable, NamedIndicatorComponent, SerializationError,
+    SerializationResult, SerializedComponentBatch, SerializedComponentColumn,
 };
 
 pub use re_byte_size::SizeBytes;
@@ -125,6 +124,10 @@ pub use re_data_loader::{DataLoader, DataLoaderError, DataLoaderSettings, Loaded
 #[cfg(feature = "web_viewer")]
 pub mod web_viewer;
 
+/// Method for spawning a gRPC server and streaming the SDK log stream to it.
+#[cfg(feature = "server")]
+pub mod grpc_server;
+
 /// Re-exports of other crates.
 pub mod external {
     pub use re_grpc_client;
@@ -132,14 +135,18 @@ pub mod external {
     pub use re_log;
     pub use re_log_encoding;
     pub use re_log_types;
+    pub use re_uri;
 
     pub use re_chunk::external::*;
     pub use re_log::external::*;
     pub use re_log_types::external::*;
 
     #[cfg(feature = "data_loaders")]
-    pub use re_data_loader;
+    pub use re_data_loader::{self, external::*};
 }
+
+#[cfg(feature = "web_viewer")]
+pub use web_viewer::serve_web_viewer;
 
 // -----
 // Misc:
@@ -208,28 +215,10 @@ pub fn new_store_info(
         application_id: application_id.into(),
         store_id: StoreId::random(StoreKind::Recording),
         cloned_from: None,
-        is_official_example: called_from_official_rust_example(),
-        started: re_log_types::Time::now(),
         store_source: re_log_types::StoreSource::RustSdk {
             rustc_version: env!("RE_BUILD_RUSTC_VERSION").into(),
             llvm_version: env!("RE_BUILD_LLVM_VERSION").into(),
         },
         store_version: Some(re_build_info::CrateVersion::LOCAL),
     }
-}
-
-#[track_caller]
-fn called_from_official_rust_example() -> bool {
-    // The sentinel file we use to identify the official examples directory.
-    const SENTINEL_FILENAME: &str = ".rerun_examples";
-    let caller = core::panic::Location::caller();
-    let mut path = std::path::PathBuf::from(caller.file());
-    let mut is_official_example = false;
-    for _ in 0..4 {
-        path.pop(); // first iteration is always a file path in our examples
-        if path.join(SENTINEL_FILENAME).exists() {
-            is_official_example = true;
-        }
-    }
-    is_official_example
 }

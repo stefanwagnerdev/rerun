@@ -24,7 +24,7 @@ This example is divided into two parts:
 - **Viewer** ([`src/viewer.rs`](src/viewer.rs)): Wraps the Rerun viewer inside an [`eframe`](https://github.com/emilk/egui/tree/master/crates/eframe) app.
 - **App** ([`src/app.rs`](src/app.rs)): The application that uses the Rerun SDK.
 
-In the `app`, an additional TCP listener is opened to allow the `viewer` to send messages to the `app`.
+In the `app`, an additional gRPC server is opened to allow the `viewer` to send messages to the `app`.
 Similar to the [`extend_viewer_ui`](../extend_viewer_ui/) example, the `viewer` is wrapped in an `eframe` app, which allows us to handle the extra communication logic and define our own control UI using [`egui`](https://github.com/emilk/egui).
 
 The communication between the `viewer` and the `app` is implemented in the [`comms`](src/comms/) module. It defines a simple protocol to send messages between the `viewer` and the `app` using [`bincode`](https://github.com/bincode-org/bincode).
@@ -34,3 +34,8 @@ The protocol supports basic commands that the `viewer` can send to the `app`, su
 
 First start the Rerun SDK app with `cargo run -p custom_callback --bin custom_callback_app`,
 and then start the extended viewer with `cargo run -p custom_callback --bin custom_callback_viewer`.
+
+## Relationship with Viewer callbacks
+
+The [`re_viewer`] crate also exposes some baseline Viewer events through the [`StartupOptions.on_event`](https://docs.rs/re_viewer/latest/re_viewer/struct.StartupOptions.html#structfield.on_event) field,
+which can exist alongside your own events from widgets added by extending the UI.

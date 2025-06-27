@@ -2,13 +2,13 @@ use std::collections::BTreeMap;
 
 use re_data_ui::item_ui;
 use re_log_types::{EntityPath, TimelineName};
-use re_types::View;
-use re_types::{components::TextLogLevel, ViewClassIdentifier};
-use re_ui::{Help, UiExt as _};
+use re_types::View as _;
+use re_types::{ViewClassIdentifier, components::TextLogLevel};
+use re_ui::{DesignTokens, Help, UiExt as _};
 use re_viewer_context::{
-    level_to_rich_text, IdentifiedViewSystem as _, ViewClass, ViewClassRegistryError, ViewId,
-    ViewQuery, ViewSpawnHeuristics, ViewState, ViewStateExt, ViewSystemExecutionError,
-    ViewerContext,
+    IdentifiedViewSystem as _, ViewClass, ViewClassRegistryError, ViewId, ViewQuery,
+    ViewSpawnHeuristics, ViewState, ViewStateExt as _, ViewSystemExecutionError, ViewerContext,
+    level_to_rich_text,
 };
 
 use super::visualizer_system::{Entry, TextLogSystem};
@@ -55,7 +55,7 @@ impl ViewClass for TextView {
         &re_ui::icons::VIEW_LOG
     }
 
-    fn help(&self, _egui_ctx: &egui::Context) -> Help<'_> {
+    fn help(&self, _os: egui::os::OperatingSystem) -> Help {
         Help::new("Text log view")
             .docs_link("https://rerun.io/docs/reference/types/views/text_log_view")
             .markdown(
@@ -84,7 +84,11 @@ Filter message types and toggle column visibility in a selection panel.",
         re_viewer_context::ViewClassLayoutPriority::Low
     }
 
-    fn spawn_heuristics(&self, ctx: &ViewerContext<'_>) -> re_viewer_context::ViewSpawnHeuristics {
+    fn spawn_heuristics(
+        &self,
+        ctx: &ViewerContext<'_>,
+        include_entity: &dyn Fn(&EntityPath) -> bool,
+    ) -> re_viewer_context::ViewSpawnHeuristics {
         re_tracing::profile_function!();
 
         // Spawn a single log view at the root if there's any text logs around anywhere.
@@ -92,11 +96,11 @@ Filter message types and toggle column visibility in a selection panel.",
         if ctx
             .indicated_entities_per_visualizer
             .get(&TextLogSystem::identifier())
-            .map_or(true, |entities| entities.is_empty())
+            .is_some_and(|entities| entities.iter().any(include_entity))
         {
-            ViewSpawnHeuristics::default()
-        } else {
             ViewSpawnHeuristics::root()
+        } else {
+            ViewSpawnHeuristics::empty()
         }
     }
 
@@ -158,6 +162,7 @@ Filter message types and toggle column visibility in a selection panel.",
     ) -> Result<(), ViewSystemExecutionError> {
         re_tracing::profile_function!();
 
+        let tokens = ui.tokens();
         let state = state.downcast_mut::<TextViewState>()?;
         let text = system_output.view_systems.get::<TextLogSystem>()?;
 
@@ -169,12 +174,12 @@ Filter message types and toggle column visibility in a selection panel.",
             .filter(|te| {
                 te.level
                     .as_ref()
-                    .map_or(true, |lvl| state.filters.is_log_level_visible(lvl))
+                    .is_none_or(|lvl| state.filters.is_log_level_visible(lvl))
             })
             .collect::<Vec<_>>();
 
         egui::Frame {
-            inner_margin: re_ui::DesignTokens::view_padding().into(),
+            inner_margin: tokens.view_padding().into(),
             ..egui::Frame::default()
         }
         .show(ui, |ui| {
@@ -277,6 +282,8 @@ fn table_ui(
     entries: &[&Entry],
     scroll_to_row: Option<usize>,
 ) {
+    let tokens = ui.tokens();
+
     let timelines = state
         .filters
         .col_timelines
@@ -323,7 +330,7 @@ fn table_ui(
         table_builder = table_builder.column(Column::remainder().at_least(100.0));
     }
     table_builder
-        .header(re_ui::DesignTokens::table_header_height(), |mut header| {
+        .header(tokens.deprecated_table_header_height(), |mut header| {
             re_ui::DesignTokens::setup_table_header(&mut header);
             for timeline in &timelines {
                 header.col(|ui| {
@@ -345,13 +352,13 @@ fn table_ui(
             });
         })
         .body(|mut body| {
-            re_ui::DesignTokens::setup_table_body(&mut body);
+            tokens.setup_table_body(&mut body);
 
             body_clip_rect = Some(body.max_rect());
 
             let query = ctx.current_query();
 
-            let row_heights = entries.iter().map(|te| calc_row_height(te));
+            let row_heights = entries.iter().map(|te| calc_row_height(tokens, te));
             body.heterogeneous_rows(row_heights, |mut row| {
                 let entry = &entries[row.index()];
 
@@ -361,7 +368,7 @@ fn table_ui(
                         let row_time = entry
                             .timepoint
                             .get(timeline)
-                            .copied()
+                            .map(re_log_types::TimeInt::from)
                             .unwrap_or(re_log_types::TimeInt::STATIC);
                         item_ui::time_button(ctx, ui, timeline, row_time);
 
@@ -431,14 +438,19 @@ fn table_ui(
         ui.painter().with_clip_rect(body_clip_rect).hline(
             ui.max_rect().x_range(),
             current_time_y,
-            (1.0, egui::Color32::WHITE),
+            (1.0, ui.tokens().strong_fg_color),
         );
     }
 }
 
-fn calc_row_height(entry: &Entry) -> f32 {
+fn calc_row_height(tokens: &DesignTokens, entry: &Entry) -> f32 {
     // Simple, fast, ugly, and functional
     let num_newlines = entry.body.bytes().filter(|&c| c == b'\n').count();
     let num_rows = 1 + num_newlines;
-    num_rows as f32 * re_ui::DesignTokens::table_line_height()
+    num_rows as f32 * tokens.table_line_height()
+}
+
+#[test]
+fn test_help_view() {
+    re_viewer_context::test_context::TestContext::test_help_view(|ctx| TextView.help(ctx));
 }

@@ -7,7 +7,7 @@ import numpy.typing as npt
 
 from rerun.datatypes.range1d import Range1DLike
 
-from ..components import Colormap, ImageFormat
+from ..components import ColormapLike, ImageFormat
 from ..datatypes import ChannelDatatype, Float32Like
 
 if TYPE_CHECKING:
@@ -33,9 +33,9 @@ def _to_numpy(tensor: ImageLike) -> npt.NDArray[Any]:
 
     try:
         # Make available to the cpu
-        return tensor.numpy(force=True)  # type: ignore[union-attr]
+        return tensor.numpy(force=True)
     except AttributeError:
-        return np.array(tensor, copy=False)
+        return np.asarray(tensor)
 
 
 class DepthImageExt:
@@ -46,11 +46,11 @@ class DepthImageExt:
         image: ImageLike,
         *,
         meter: Float32Like | None = None,
-        colormap: Colormap | None = None,
+        colormap: ColormapLike | None = None,
         depth_range: Range1DLike | None = None,
         point_fill_ratio: Float32Like | None = None,
         draw_order: Float32Like | None = None,
-    ):
+    ) -> None:
         """
         Create a new instance of the DepthImage archetype.
 
@@ -115,7 +115,7 @@ class DepthImageExt:
         try:
             datatype = ChannelDatatype.from_np_dtype(image.dtype)
         except KeyError:
-            raise ValueError(f"Unsupported dtype {image.dtype} for DepthImage")
+            raise ValueError(f"Unsupported dtype {image.dtype} for DepthImage") from None
 
         self.__attrs_init__(
             buffer=image.tobytes(),

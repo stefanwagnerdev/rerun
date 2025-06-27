@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -22,11 +21,10 @@ class TriangleIndices(datatypes.UVec3D, ComponentMixin):
     # You can define your own __init__ function as a member of TriangleIndicesExt in triangle_indices_ext.py
 
     # Note: there are no fields here because TriangleIndices delegates to datatypes.UVec3D
-    pass
 
 
 class TriangleIndicesBatch(datatypes.UVec3DBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.TriangleIndices")
+    _COMPONENT_TYPE: str = "rerun.components.TriangleIndices"
 
 
 # This is patched in late to avoid circular dependencies.

@@ -5,14 +5,14 @@
 
 from __future__ import annotations
 
-from typing import Literal, Sequence, Union
+from collections.abc import Sequence
+from typing import Literal, Union
 
 import pyarrow as pa
 
 from .._baseclasses import (
     BaseBatch,
     ComponentBatchMixin,
-    ComponentDescriptor,
 )
 
 __all__ = ["TransformRelation", "TransformRelationArrayLike", "TransformRelationBatch", "TransformRelationLike"]
@@ -71,7 +71,7 @@ TransformRelationArrayLike = Union[TransformRelationLike, Sequence[TransformRela
 
 class TransformRelationBatch(BaseBatch[TransformRelationArrayLike], ComponentBatchMixin):
     _ARROW_DATATYPE = pa.uint8()
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.TransformRelation")
+    _COMPONENT_TYPE: str = "rerun.components.TransformRelation"
 
     @staticmethod
     def _native_to_pa_array(data: TransformRelationArrayLike, data_type: pa.DataType) -> pa.Array:

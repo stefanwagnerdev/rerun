@@ -32,13 +32,13 @@ HAS_NO_RERUN_ARGS = {
     "examples/python/stdio",
 }
 
-MIN_PYTHON_REQUIREMENTS: dict[str : tuple[int, int]] = {
+MIN_PYTHON_REQUIREMENTS: dict[str, tuple[int, int]] = {
     "examples/python/controlnet": (3, 10),
     # pyopf requires Python 3.10
     "examples/python/open_photogrammetry_format": (3, 10),
 }
 
-MAX_PYTHON_REQUIREMENTS: dict[str : tuple[int, int]] = {
+MAX_PYTHON_REQUIREMENTS: dict[str, tuple[int, int]] = {
     "examples/python/face_tracking": (3, 11),  # TODO(ab): remove when mediapipe is 3.12 compatible
     "examples/python/human_pose_tracking": (3, 11),  # TODO(ab): remove when mediapipe is 3.12 compatible
     "examples/python/llm_embedding_ner": (3, 11),  # TODO(ab): remove when torch is umap-learn/numba is 3.12 compatible
@@ -53,9 +53,7 @@ SKIP_LIST = [
     "examples/python/external_data_loader",
 ]
 
-MAC_SKIP_LIST = [
-    "examples/python/signed_distance_fields",
-]
+MAC_SKIP_LIST: list[str] = []
 
 
 def start_process(args: list[str], *, wait: bool) -> Any:
@@ -95,7 +93,7 @@ def run_py_example(path: str, viewer_port: int | None = None, *, wait: bool = Tr
 
 
 # stdout and stderr
-def output_from_process(process: Any) -> str:
+def output_from_process(process: subprocess.Popen[bytes]) -> str:
     return process.communicate()[0].decode("utf-8").rstrip()
 
 
@@ -116,7 +114,6 @@ def collect_examples(fast: bool) -> list[str]:
             "examples/python/plots",
             "examples/python/raw_mesh",
             "examples/python/rgbd",
-            "examples/python/signed_distance_fields",
             "examples/python/structure_from_motion",
         ]
     else:
@@ -157,15 +154,15 @@ class Viewer:
     web: bool
     sdk_port: int  # where the logging SDK sends the log stream (where the server receives)
     web_viewer_port: int  # the HTTP port where we serve the web viewer
-    ws_server_port: int  # the WebSocket port where we serve the log stream
+    grpc_server_port: int  # the gRPC port where we serve the log stream
     process: Any | None
 
-    def __init__(self, close: bool = False, web: bool = False):
+    def __init__(self, close: bool = False, web: bool = False) -> None:
         self.should_close = close
         self.web = web
         self.sdk_port = get_free_port()
         self.web_viewer_port = get_free_port()
-        self.ws_server_port = get_free_port()
+        self.grpc_server_port = get_free_port()
         self.process = None
 
     def close(self) -> None:
@@ -180,7 +177,7 @@ class Viewer:
             args += [
                 "--web-viewer",
                 f"--web-viewer-port={self.web_viewer_port}",
-                f"--port={self.ws_server_port}",
+                f"--port={self.grpc_server_port}",
             ]
 
         self.process = subprocess.Popen(args)
@@ -235,14 +232,16 @@ def run_install_requirements(examples: list[str]) -> None:
     for example in examples:
         req = Path(example) / "requirements.txt"
         if req.exists():
-            args.extend(["-r", req])
+            args.extend(["-r", str(req)])
 
     print("Installing examples requirements…")
-    returncode = subprocess.Popen([
-        "pip",
-        "install",
-        *args,
-    ]).wait()
+    returncode = subprocess.Popen(
+        [
+            "pip",
+            "install",
+        ]
+        + args
+    ).wait()
     assert returncode == 0, f"process exited with error code {returncode}"
 
 
@@ -353,7 +352,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Runs all examples.")
     parser.add_argument("--skip-build", action="store_true", help="Skip building the Python SDK.")
     parser.add_argument(
-        "--install-requirements", action="store_true", help="Install Python requirements for each example."
+        "--install-requirements",
+        action="store_true",
+        help="Install Python requirements for each example.",
     )
     parser.add_argument("--web", action="store_true", help="Run examples in a web viewer.")
     parser.add_argument(
@@ -362,7 +363,9 @@ def main() -> None:
         help="Run examples and save them to disk as rrd.",
     )
     parser.add_argument(
-        "--load", action="store_true", help="Run examples using rrd files previously saved via `--save`."
+        "--load",
+        action="store_true",
+        help="Run examples using rrd files previously saved via `--save`.",
     )
     parser.add_argument("--fast", action="store_true", help="Run only examples which complete quickly.")
     parser.add_argument("--parallel", action="store_true", help="Run all examples in parallel.")

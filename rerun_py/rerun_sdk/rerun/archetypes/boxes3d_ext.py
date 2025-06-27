@@ -23,7 +23,7 @@ class Boxes3DExt:
         rotations: datatypes.RotationAxisAngleArrayLike | datatypes.QuaternionArrayLike | None = None,
         colors: datatypes.Rgba32ArrayLike | None = None,
         radii: datatypes.Float32ArrayLike | None = None,
-        fill_mode: components.FillMode | None = None,
+        fill_mode: components.FillModeLike | None = None,
         labels: datatypes.Utf8ArrayLike | None = None,
         show_labels: datatypes.BoolLike | None = None,
         class_ids: datatypes.ClassIdArrayLike | None = None,
@@ -99,7 +99,8 @@ class Boxes3DExt:
             if rotations is not None:
                 if quaternions is not None or rotation_axis_angles is not None:
                     _send_warning_or_raise(
-                        "Cannot specify both `rotations` and `quaternions` or `rotation_axis_angles`.", 1
+                        "Cannot specify both `rotations` and `quaternions` or `rotation_axis_angles`.",
+                        1,
                     )
                 else:
                     try:

@@ -1,7 +1,7 @@
-use super::{wait_for_output, Channel, Example};
+use super::{Channel, Example, wait_for_output};
 use indicatif::MultiProgress;
-use rayon::prelude::IntoParallelIterator;
-use rayon::prelude::ParallelIterator;
+use rayon::prelude::IntoParallelIterator as _;
+use rayon::prelude::ParallelIterator as _;
 use std::fs::create_dir_all;
 use std::path::Path;
 use std::path::PathBuf;
@@ -89,6 +89,10 @@ impl Example {
             // * the file is chunked into small batches for better streaming
             cmd.env("RERUN_FLUSH_TICK_SECS", 1_000_000_000.to_string());
             cmd.env("RERUN_FLUSH_NUM_BYTES", (128 * 1024).to_string());
+
+            cmd.env("PYTHONWARNINGS", "error"); // raise exception on warnings, e.g. when using a @deprecated function
+            cmd.env("RERUN_PANIC_ON_WARN", "1"); // any logged warnings/errors should cause a failure
+            cmd.env("RERUN_STRICT", "1"); // any misuse of the API should cause a failure
 
             wait_for_output(cmd, &self.name, progress)?;
         }

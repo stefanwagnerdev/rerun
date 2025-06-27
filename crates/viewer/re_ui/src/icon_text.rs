@@ -1,100 +1,84 @@
-use crate::{icons, Icon};
-use egui::{ModifierNames, Modifiers};
-use std::borrow::Cow;
+use std::iter::once;
 
-#[derive(Debug, Clone)]
-pub enum IconTextItem<'a> {
-    Icon(Icon),
-    Text(Cow<'a, str>),
-}
+use egui::{Atom, Atoms, IntoAtoms as _, ModifierNames, Modifiers, os::OperatingSystem};
 
-impl<'a> IconTextItem<'a> {
-    pub fn icon(icon: Icon) -> Self {
-        Self::Icon(icon)
+use crate::icons;
+
+pub struct IconText;
+
+impl IconText {
+    pub fn from_keyboard_shortcut(
+        os: OperatingSystem,
+        shortcut: egui::KeyboardShortcut,
+    ) -> Atoms<'static> {
+        let egui::KeyboardShortcut {
+            modifiers,
+            logical_key,
+        } = shortcut;
+
+        let key_text = if os.is_mac() {
+            logical_key.symbol_or_name()
+        } else {
+            logical_key.name()
+        };
+        Self::from_modifiers_and(os, modifiers, key_text)
     }
 
-    pub fn text(text: impl Into<Cow<'a, str>>) -> Self {
-        Self::Text(text.into())
-    }
-}
-
-/// Helper to show text with icons in a row.
-/// Usually created via the [`crate::icon_text!`] macro.
-#[derive(Default, Debug, Clone)]
-pub struct IconText<'a>(pub Vec<IconTextItem<'a>>);
-
-impl<'a> IconText<'a> {
-    /// Create a new, empty `IconText`.
-    pub fn new() -> Self {
-        Self(Vec::new())
-    }
-
-    /// Add an icon to the row.
-    pub fn icon(&mut self, icon: Icon) {
-        self.0.push(IconTextItem::Icon(icon));
+    pub fn from_modifiers_and(
+        os: OperatingSystem,
+        modifiers: Modifiers,
+        icon: impl Into<Atom<'static>>,
+    ) -> Atoms<'static> {
+        if modifiers.is_none() {
+            (icon.into()).into_atoms()
+        } else {
+            // macOS uses compact symbols for shortcuts without a `+`:
+            if os.is_mac() {
+                (Self::from_modifiers(os, modifiers), icon.into()).into_atoms()
+            } else {
+                (Self::from_modifiers(os, modifiers), "+", icon.into()).into_atoms()
+            }
+        }
     }
 
-    /// Add text to the row.
-    pub fn text(&mut self, text: impl Into<Cow<'a, str>>) {
-        self.0.push(IconTextItem::Text(text.into()));
-    }
+    /// Helper to add [`egui::Modifiers`] as text with icons.
+    /// Will automatically show Cmd/Ctrl based on the OS.
+    pub fn from_modifiers(os: OperatingSystem, modifiers: Modifiers) -> Atoms<'static> {
+        let is_mac = os.is_mac();
 
-    /// Add an item to the row.
-    pub fn add(&mut self, item: impl Into<IconTextItem<'a>>) {
-        self.0.push(item.into());
-    }
-}
-
-impl<'a> From<Icon> for IconTextItem<'a> {
-    fn from(icon: Icon) -> Self {
-        IconTextItem::Icon(icon)
-    }
-}
-
-impl<'a> From<&'a str> for IconTextItem<'a> {
-    fn from(text: &'a str) -> Self {
-        IconTextItem::Text(text.into())
-    }
-}
-
-impl<'a> From<String> for IconTextItem<'a> {
-    fn from(text: String) -> Self {
-        IconTextItem::Text(text.into())
-    }
-}
-
-/// Create an [`IconText`] with the given items.
-#[macro_export]
-macro_rules! icon_text {
-    ($($item:expr),* $(,)?) => {{
-        let mut icon_text = $crate::IconText::new();
-        $(icon_text.add($item);)*
-        icon_text
-    }};
-}
-
-/// Helper to add [`egui::Modifiers`] as text with icons.
-/// Will automatically show Cmd/Ctrl based on the OS.
-pub struct ModifiersText<'a>(pub Modifiers, pub &'a egui::Context);
-
-impl<'a> From<ModifiersText<'a>> for IconTextItem<'static> {
-    fn from(value: ModifiersText<'a>) -> Self {
-        let ModifiersText(modifiers, ctx) = value;
-
-        let is_mac = matches!(
-            ctx.os(),
-            egui::os::OperatingSystem::Mac | egui::os::OperatingSystem::IOS
-        );
-
-        let mut names = ModifierNames::NAMES;
-        names.concat = " + ";
+        let names = if is_mac {
+            ModifierNames::SYMBOLS
+        } else {
+            ModifierNames::NAMES
+        };
         let text = names.format(&modifiers, is_mac);
 
-        // Only shift has an icon for now
-        if text == "Shift" {
-            IconTextItem::Icon(icons::SHIFT)
+        if is_mac {
+            let mut atoms = Atoms::new(());
+            for char in text.chars() {
+                if char == '⌘' {
+                    atoms.push_right(icons::COMMAND);
+                } else if char == '⌃' {
+                    atoms.push_right(icons::CONTROL);
+                } else if char == '⇧' {
+                    atoms.push_right(icons::SHIFT);
+                } else if char == '⌥' {
+                    atoms.push_right(icons::OPTION);
+                } else {
+                    // If there is anything else than the modifier symbols, just show the text.
+                    return text.into_atoms();
+                }
+            }
+            atoms
         } else {
-            IconTextItem::text(text)
+            let mut vec: Vec<_> = text
+                .split('+')
+                // We want each + to be an extra item so the spacing looks nicer
+                .flat_map(|item| once(item).chain(once("+")))
+                .collect();
+            vec.pop(); // Remove the last "+"
+
+            vec.into()
         }
     }
 }
@@ -102,14 +86,14 @@ impl<'a> From<ModifiersText<'a>> for IconTextItem<'static> {
 /// Helper to show mouse buttons as text/icons.
 pub struct MouseButtonText(pub egui::PointerButton);
 
-impl From<MouseButtonText> for IconTextItem<'static> {
+impl From<MouseButtonText> for Atom<'_> {
     fn from(value: MouseButtonText) -> Self {
         match value.0 {
-            egui::PointerButton::Primary => IconTextItem::icon(icons::LEFT_MOUSE_CLICK),
-            egui::PointerButton::Secondary => IconTextItem::icon(icons::RIGHT_MOUSE_CLICK),
-            egui::PointerButton::Middle => IconTextItem::text("middle mouse button"),
-            egui::PointerButton::Extra1 => IconTextItem::text("extra 1 mouse button"),
-            egui::PointerButton::Extra2 => IconTextItem::text("extra 2 mouse button"),
+            egui::PointerButton::Primary => icons::LEFT_MOUSE_CLICK.into(),
+            egui::PointerButton::Secondary => icons::RIGHT_MOUSE_CLICK.into(),
+            egui::PointerButton::Middle => "middle mouse button".into(),
+            egui::PointerButton::Extra1 => "extra 1 mouse button".into(),
+            egui::PointerButton::Extra2 => "extra 2 mouse button".into(),
         }
     }
 }

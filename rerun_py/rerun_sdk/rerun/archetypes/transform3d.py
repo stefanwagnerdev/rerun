@@ -81,12 +81,14 @@ class Transform3D(Transform3DExt, Archetype):
 
     rr.init("rerun_example_transform3d_hierarchy", spawn=True)
 
-    # One space with the sun in the center, and another one with the planet.
-    rr.send_blueprint(
-        rrb.Horizontal(rrb.Spatial3DView(origin="sun"), rrb.Spatial3DView(origin="sun/planet", contents="sun/**"))
-    )
+    if False:
+        # One space with the sun in the center, and another one with the planet.
+        # TODO(#5521): enable this once we have it in Rust too, so that the snippets compare equally
+        rr.send_blueprint(
+            rrb.Horizontal(rrb.Spatial3DView(origin="sun"), rrb.Spatial3DView(origin="sun/planet", contents="sun/**")),
+        )
 
-    rr.set_time_seconds("sim_time", 0)
+    rr.set_time("sim_time", duration=0)
 
     # Planetary motion is typically in the XY plane.
     rr.log("/", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
@@ -101,14 +103,14 @@ class Transform3D(Transform3DExt, Archetype):
     d_planet = 6.0
     d_moon = 3.0
     angles = np.arange(0.0, 1.01, 0.01) * np.pi * 2
-    circle = np.array([np.sin(angles), np.cos(angles), angles * 0.0]).transpose()
+    circle = np.array([np.sin(angles), np.cos(angles), angles * 0.0], dtype=np.float32).transpose()
     rr.log("sun/planet_path", rr.LineStrips3D(circle * d_planet))
     rr.log("sun/planet/moon_path", rr.LineStrips3D(circle * d_moon))
 
     # Movement via transforms.
-    for i in range(0, 6 * 120):
+    for i in range(6 * 120):
         time = i / 120.0
-        rr.set_time_seconds("sim_time", time)
+        rr.set_time("sim_time", duration=time)
         r_moon = time * 5.0
         r_planet = time * 2.0
 
@@ -123,7 +125,7 @@ class Transform3D(Transform3DExt, Archetype):
             "sun/planet/moon",
             rr.Transform3D(
                 translation=[np.cos(r_moon) * d_moon, np.sin(r_moon) * d_moon, 0.0],
-                from_parent=True,
+                relation=rr.TransformRelation.ChildFromParent,
             ),
         )
     ```
@@ -150,7 +152,7 @@ class Transform3D(Transform3DExt, Archetype):
 
     rr.init("rerun_example_transform3d_row_updates", spawn=True)
 
-    rr.set_time_sequence("tick", 0)
+    rr.set_time("tick", sequence=0)
     rr.log(
         "box",
         rr.Boxes3D(half_sizes=[4.0, 2.0, 1.0], fill_mode=rr.components.FillMode.Solid),
@@ -158,7 +160,7 @@ class Transform3D(Transform3DExt, Archetype):
     )
 
     for t in range(100):
-        rr.set_time_sequence("tick", t + 1)
+        rr.set_time("tick", sequence=t + 1)
         rr.log(
             "box",
             rr.Transform3D(
@@ -191,7 +193,7 @@ class Transform3D(Transform3DExt, Archetype):
 
     rr.init("rerun_example_transform3d_column_updates", spawn=True)
 
-    rr.set_time_sequence("tick", 0)
+    rr.set_time("tick", sequence=0)
     rr.log(
         "box",
         rr.Boxes3D(half_sizes=[4.0, 2.0, 1.0], fill_mode=rr.components.FillMode.Solid),
@@ -200,7 +202,7 @@ class Transform3D(Transform3DExt, Archetype):
 
     rr.send_columns(
         "box",
-        indexes=[rr.TimeSequenceColumn("tick", range(1, 101))],
+        indexes=[rr.TimeColumn("tick", sequence=range(1, 101))],
         columns=rr.Transform3D.columns(
             translation=[[0, 0, t / 10.0] for t in range(100)],
             rotation_axis_angle=[
@@ -430,26 +432,34 @@ class Transform3D(Transform3DExt, Archetype):
             return ComponentColumnList([])
 
         kwargs = {
-            "translation": translation,
-            "rotation_axis_angle": rotation_axis_angle,
-            "quaternion": quaternion,
-            "scale": scale,
-            "mat3x3": mat3x3,
-            "relation": relation,
-            "axis_length": axis_length,
+            "Transform3D:translation": translation,
+            "Transform3D:rotation_axis_angle": rotation_axis_angle,
+            "Transform3D:quaternion": quaternion,
+            "Transform3D:scale": scale,
+            "Transform3D:mat3x3": mat3x3,
+            "Transform3D:relation": relation,
+            "Transform3D:axis_length": axis_length,
         }
         columns = []
 
         for batch in batches:
             arrow_array = batch.as_arrow_array()
 
-            # For primitive arrays, we infer partition size from the input shape.
-            if pa.types.is_primitive(arrow_array.type):
-                param = kwargs[batch.component_descriptor().archetype_field_name]  # type: ignore[index]
+            # For primitive arrays and fixed size list arrays, we infer partition size from the input shape.
+            if pa.types.is_primitive(arrow_array.type) or pa.types.is_fixed_size_list(arrow_array.type):
+                param = kwargs[batch.component_descriptor().component]  # type: ignore[index]
                 shape = np.shape(param)  # type: ignore[arg-type]
+                elem_flat_len = int(np.prod(shape[1:])) if len(shape) > 1 else 1  # type: ignore[redundant-expr,misc]
 
-                batch_length = shape[1] if len(shape) > 1 else 1
-                num_rows = shape[0] if len(shape) >= 1 else 1
+                if pa.types.is_fixed_size_list(arrow_array.type) and arrow_array.type.list_size == elem_flat_len:
+                    # If the product of the last dimensions of the shape are equal to the size of the fixed size list array,
+                    # we have `num_rows` single element batches (each element is a fixed sized list).
+                    # (This should have been already validated by conversion to the arrow_array)
+                    batch_length = 1
+                else:
+                    batch_length = shape[1] if len(shape) > 1 else 1  # type: ignore[redundant-expr,misc]
+
+                num_rows = shape[0] if len(shape) >= 1 else 1  # type: ignore[redundant-expr,misc]
                 sizes = batch_length * np.ones(num_rows)
             else:
                 # For non-primitive types, default to partitioning each element separately.

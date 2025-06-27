@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -22,11 +21,10 @@ class StrokeWidth(datatypes.Float32, ComponentMixin):
     # You can define your own __init__ function as a member of StrokeWidthExt in stroke_width_ext.py
 
     # Note: there are no fields here because StrokeWidth delegates to datatypes.Float32
-    pass
 
 
 class StrokeWidthBatch(datatypes.Float32Batch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.StrokeWidth")
+    _COMPONENT_TYPE: str = "rerun.components.StrokeWidth"
 
 
 # This is patched in late to avoid circular dependencies.

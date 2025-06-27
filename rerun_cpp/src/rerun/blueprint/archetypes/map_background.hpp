@@ -17,6 +17,9 @@
 
 namespace rerun::blueprint::archetypes {
     /// **Archetype**: Configuration for the background map of the map view.
+    ///
+    /// ⚠ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    ///
     struct MapBackground {
         /// Map provider and style to use.
         ///
@@ -24,18 +27,18 @@ namespace rerun::blueprint::archetypes {
         std::optional<ComponentBatch> provider;
 
       public:
-        static constexpr const char IndicatorComponentName[] =
+        static constexpr const char IndicatorComponentType[] =
             "rerun.blueprint.components.MapBackgroundIndicator";
 
         /// Indicator component, used to identify the archetype when converting to a list of components.
-        using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentName>;
+        using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentType>;
         /// The name of the archetype as used in `ComponentDescriptor`s.
         static constexpr const char ArchetypeName[] = "rerun.blueprint.archetypes.MapBackground";
 
         /// `ComponentDescriptor` for the `provider` field.
         static constexpr auto Descriptor_provider = ComponentDescriptor(
-            ArchetypeName, "provider",
-            Loggable<rerun::blueprint::components::MapProvider>::Descriptor.component_name
+            ArchetypeName, "MapBackground:provider",
+            Loggable<rerun::blueprint::components::MapProvider>::ComponentType
         );
 
       public:

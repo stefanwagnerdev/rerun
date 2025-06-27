@@ -1,6 +1,6 @@
 {
   "name": "@rerun-io/web-viewer",
-  "version": "0.23.0-alpha.1+dev",
+  "version": "0.24.0-alpha.1+dev",
   "description": "Embed the Rerun web viewer in your app",
   "licenses": [
     {
@@ -12,10 +12,11 @@
   ],
   "scripts": {
     "build:wasm": "node build-wasm.mjs --mode release",
-    "build:js": "tsc && node bundle.mjs",
+    "build:js": "tsc",
     "build": "npm run build:wasm && npm run build:js",
     "build:wasm:debug": "node build-wasm.mjs --mode debug",
-    "build:debug": "npm run build:wasm:debug && npm run build:js"
+    "build:debug": "npm run build:wasm:debug && npm run build:js",
+    "pack": "yarn pack --filename web-viewer.tar.gz"
   },
   "repository": {
     "type": "git",

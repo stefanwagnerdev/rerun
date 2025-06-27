@@ -25,11 +25,13 @@ class ForceManyBody(Archetype):
     **Archetype**: A force between each pair of nodes that ressembles an electrical charge.
 
     If `strength` is smaller than 0, it pushes nodes apart, if it is larger than 0 it pulls them together.
+
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
     """
 
     def __init__(
         self: Any, *, enabled: datatypes.BoolLike | None = None, strength: datatypes.Float64Like | None = None
-    ):
+    ) -> None:
         """
         Create a new instance of the ForceManyBody archetype.
 

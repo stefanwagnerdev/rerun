@@ -1,24 +1,23 @@
-use egui::NumExt as _;
+use egui::{NumExt as _, TextBuffer};
 use egui_tiles::ContainerKind;
 
-use re_context_menu::{context_menu_ui_for_item, SelectionUpdateBehavior};
+use re_context_menu::{SelectionUpdateBehavior, context_menu_ui_for_item};
 use re_data_ui::{
-    item_ui::{self, cursor_interact_with_selectable, guess_query_and_db_for_selected_entity},
     DataUi,
+    item_ui::{self, cursor_interact_with_selectable, guess_query_and_db_for_selected_entity},
 };
 use re_entity_db::{EntityPath, InstancePath};
 use re_log_types::{ComponentPath, EntityPathFilter, EntityPathSubs, ResolvedEntityPathFilter};
-use re_types::blueprint::components::Interactive;
+use re_types::ComponentDescriptor;
 use re_ui::{
-    icons,
+    ContextExt as _, UiExt as _, icons,
     list_item::{self, PropertyContent},
-    ContextExt as _, UiExt,
 };
 use re_viewer_context::{
-    contents_name_style, icon_for_container_kind, ContainerId, Contents, DataQueryResult,
-    DataResult, HoverHighlight, Item, UiLayout, ViewContext, ViewId, ViewStates, ViewerContext,
+    ContainerId, Contents, DataQueryResult, DataResult, HoverHighlight, Item, UiLayout,
+    ViewContext, ViewId, ViewStates, ViewerContext, contents_name_style, icon_for_container_kind,
 };
-use re_viewport_blueprint::{ui::show_add_view_or_container_modal, ViewportBlueprint};
+use re_viewport_blueprint::{ViewportBlueprint, ui::show_add_view_or_container_modal};
 
 use crate::{
     defaults_ui::view_components_defaults_section_ui,
@@ -110,6 +109,8 @@ impl SelectionPanel {
             return;
         }
 
+        let tokens = ui.tokens();
+
         // no gap before the first item title
         ui.add_space(-ui.spacing().item_spacing.y);
 
@@ -131,7 +132,7 @@ impl SelectionPanel {
         } else {
             list_item::list_item_scope(ui, "selections_panel", |ui| {
                 ui.list_item()
-                    .with_height(re_ui::DesignTokens::title_bar_height())
+                    .with_height(tokens.title_bar_height())
                     .interactive(false)
                     .selected(true)
                     .show_flat(
@@ -164,14 +165,14 @@ impl SelectionPanel {
             Item::ComponentPath(component_path) => {
                 let ComponentPath {
                     entity_path,
-                    component_name,
+                    component_descriptor,
                 } = component_path;
 
                 let (query, db) = guess_query_and_db_for_selected_entity(ctx, entity_path);
                 let is_static = db
                     .storage_engine()
                     .store()
-                    .entity_has_static_component(entity_path, component_name);
+                    .entity_has_static_component(entity_path, component_descriptor);
 
                 ui.list_item_flat_noninteractive(PropertyContent::new("Parent entity").value_fn(
                     |ui, _| {
@@ -180,12 +181,65 @@ impl SelectionPanel {
                 ));
 
                 ui.list_item_flat_noninteractive(
-                    PropertyContent::new("Component type").value_text(if is_static {
+                    PropertyContent::new("Index type").value_text(if is_static {
                         "Static"
                     } else {
                         "Temporal"
                     }),
                 );
+
+                let ComponentDescriptor {
+                    archetype: archetype_name,
+                    component: _,
+                    component_type,
+                } = component_descriptor;
+
+                if let Some(archetype_name) = archetype_name {
+                    ui.list_item_flat_noninteractive(PropertyContent::new("Archetype").value_fn(
+                        |ui, _| {
+                            ui.label(archetype_name.short_name()).on_hover_ui(|ui| {
+                                ui.spacing_mut().item_spacing.y = 12.0;
+
+                                ui.strong(archetype_name.full_name());
+
+                                if let Some(doc_url) = archetype_name.doc_url() {
+                                    ui.re_hyperlink("Full documentation", doc_url, true);
+                                }
+                            });
+                        },
+                    ));
+                }
+
+                ui.list_item_flat_noninteractive(
+                    PropertyContent::new("Archetype field")
+                        .value_text(component_descriptor.archetype_field_name()),
+                );
+
+                if let Some(component_type) = component_type {
+                    ui.list_item_flat_noninteractive(
+                        PropertyContent::new("Component type").value_fn(|ui, _| {
+                            ui.label(component_type.short_name()).on_hover_ui(|ui| {
+                                ui.spacing_mut().item_spacing.y = 12.0;
+
+                                ui.strong(component_type.full_name());
+
+                                // Only show the first line of the docs:
+                                if let Some(markdown) = ctx
+                                    .reflection()
+                                    .components
+                                    .get(component_type)
+                                    .map(|info| info.docstring_md)
+                                {
+                                    ui.markdown_ui(markdown);
+                                }
+
+                                if let Some(doc_url) = component_type.doc_url() {
+                                    ui.re_hyperlink("Full documentation", doc_url, true);
+                                }
+                            });
+                        }),
+                    );
+                }
 
                 list_existing_data_blueprints(ctx, viewport, ui, &entity_path.clone().into());
             }
@@ -282,21 +336,27 @@ impl SelectionPanel {
             _ => {}
         }
 
+        let (query, db) = if let Some(entity_path) = item.entity_path() {
+            guess_query_and_db_for_selected_entity(ctx, entity_path)
+        } else {
+            (ctx.current_query(), ctx.recording())
+        };
+
         if let Some(data_ui_item) = data_section_ui(item) {
             ui.section_collapsing_header("Data").show(ui, |ui| {
                 // TODO(#6075): Because `list_item_scope` changes it. Temporary until everything is `ListItem`.
                 ui.spacing_mut().item_spacing.y = ui.ctx().style().spacing.item_spacing.y;
-
-                let (query, db) = if let Some(entity_path) = item.entity_path() {
-                    guess_query_and_db_for_selected_entity(ctx, entity_path)
-                } else {
-                    (ctx.current_query(), ctx.recording())
-                };
                 data_ui_item.data_ui(ctx, ui, ui_layout, &query, db);
             });
         }
 
         match item {
+            Item::StoreId(_) => {
+                ui.section_collapsing_header("Properties").show(ui, |ui| {
+                    show_recording_properties(ctx, db, &query, ui, ui_layout);
+                });
+            }
+
             Item::View(view_id) => {
                 self.view_selection_ui(ctx, ui, viewport, view_id, view_states);
             }
@@ -369,9 +429,13 @@ The last rule matching `/world/house` is `+ /world/**`, so it is included.
         if let Some(view) = viewport.view(view_id) {
             ui.section_collapsing_header("Entity path filter")
                 .button(
-                    list_item::ItemActionButton::new(&re_ui::icons::EDIT, || {
-                        self.view_entity_modal.open(*view_id);
-                    })
+                    list_item::ItemActionButton::new(
+                        &re_ui::icons::EDIT,
+                        "Add new entity…",
+                        || {
+                            self.view_entity_modal.open(*view_id);
+                        },
+                    )
                     .hover_text("Modify the entity query using the editor"),
                 )
                 .help_markdown(markdown)
@@ -432,6 +496,39 @@ The last rule matching `/world/house` is `+ /world/**`, so it is included.
     }
 }
 
+fn show_recording_properties(
+    ctx: &ViewerContext<'_>,
+    db: &re_entity_db::EntityDb,
+    query: &re_chunk::LatestAtQuery,
+    ui: &mut egui::Ui,
+    ui_layout: UiLayout,
+) {
+    let filtered = db
+        .entity_paths()
+        .into_iter()
+        .filter(|entity_path| {
+            // Only check for properties, but skip the recording properties,
+            // because we display them already elsewhere in the UI.
+            entity_path.is_descendant_of(&EntityPath::properties())
+        })
+        .collect::<Vec<_>>();
+
+    if filtered.is_empty() {
+        ui.label("No properties found for this recording.");
+    } else {
+        for entity_path in filtered {
+            // We strip the property part
+            let name = entity_path
+                .to_string()
+                .strip_prefix(format!("{}/", EntityPath::properties()).as_str())
+                .map(re_case::to_human_case)
+                .unwrap_or("<unknown>".to_owned());
+            ui.label(name);
+            entity_path.data_ui(ctx, ui, ui_layout, query, db);
+        }
+    }
+}
+
 fn entity_selection_ui(
     ctx: &ViewerContext<'_>,
     ui: &mut egui::Ui,
@@ -483,6 +580,7 @@ fn entity_path_filter_ui(
     origin: &EntityPath,
 ) -> Option<EntityPathFilter> {
     fn syntax_highlight_entity_path_filter(
+        tokens: &re_ui::DesignTokens,
         style: &egui::Style,
         mut string: &str,
     ) -> egui::text::LayoutJob {
@@ -497,9 +595,9 @@ fn entity_path_filter_ui(
             let is_exclusion = line.trim_start().starts_with('-');
 
             let color = if is_exclusion {
-                egui::Color32::LIGHT_RED
+                style.visuals.error_fg_color
             } else {
-                egui::Color32::LIGHT_GREEN
+                tokens.info_log_text_color
             };
 
             let text_format = egui::TextFormat {
@@ -514,8 +612,13 @@ fn entity_path_filter_ui(
         job
     }
 
-    fn text_layouter(ui: &egui::Ui, string: &str, wrap_width: f32) -> std::sync::Arc<egui::Galley> {
-        let mut layout_job = syntax_highlight_entity_path_filter(ui.style(), string);
+    fn text_layouter(
+        ui: &egui::Ui,
+        text: &dyn TextBuffer,
+        wrap_width: f32,
+    ) -> std::sync::Arc<egui::Galley> {
+        let mut layout_job =
+            syntax_highlight_entity_path_filter(ui.tokens(), ui.style(), text.as_str());
         layout_job.wrap.max_width = wrap_width;
         ui.fonts(|f| f.layout_job(layout_job))
     }
@@ -526,8 +629,11 @@ fn entity_path_filter_ui(
     let filter_text_id = ui.id().with("filter_text");
 
     let mut filter_string = ui.data_mut(|data| {
-        data.get_temp_mut_or_insert_with::<String>(filter_text_id, || filter.formatted())
-            .clone()
+        data.get_temp_mut_or_insert_with::<String>(filter_text_id, || {
+            // We hide the properties filter by default.
+            filter.formatted_without_properties()
+        })
+        .clone()
     });
 
     let response = ui.add(
@@ -595,7 +701,7 @@ fn container_children(
 
     ui.section_collapsing_header("Contents")
         .button(
-            list_item::ItemActionButton::new(&re_ui::icons::ADD, || {
+            list_item::ItemActionButton::new(&re_ui::icons::ADD, "Add to container", || {
                 show_add_view_or_container_modal(*container_id);
             })
             .hover_text("Add a new view or container to this container"),
@@ -613,7 +719,11 @@ fn data_section_ui(item: &Item) -> Option<Box<dyn DataUi>> {
             Some(Box::new(instance_path.clone()))
         }
         // Skip data ui since we don't know yet what to show for these.
-        Item::View(_) | Item::Container(_) => None,
+        Item::TableId(_)
+        | Item::View(_)
+        | Item::Container(_)
+        | Item::RedapEntry(_)
+        | Item::RedapServer(_) => None,
     }
 }
 
@@ -873,7 +983,7 @@ fn show_list_item_for_container_child(
                     .with_icon(view.class(ctx.view_class_registry()).icon())
                     .with_buttons(|ui| {
                         let response = ui
-                            .small_icon_button(&icons::REMOVE)
+                            .small_icon_button(&icons::REMOVE, "Remove this view")
                             .on_hover_text("Remove this view");
 
                         if response.clicked() {
@@ -899,7 +1009,7 @@ fn show_list_item_for_container_child(
                     .with_icon(icon_for_container_kind(&container.container_kind))
                     .with_buttons(|ui| {
                         let response = ui
-                            .small_icon_button(&icons::REMOVE)
+                            .small_icon_button(&icons::REMOVE, "Remove this container")
                             .on_hover_text("Remove this container");
 
                         if response.clicked() {
@@ -943,58 +1053,30 @@ fn visible_interactive_toggle_ui(
     query_result: &DataQueryResult,
     data_result: &DataResult,
 ) {
-    use re_types::components::Visible;
-    use re_types::Component as _;
-
     {
-        let visible_before = data_result.is_visible(ctx.viewer_ctx);
+        let visible_before = data_result.is_visible();
         let mut visible = visible_before;
-
-        let inherited_hint = if data_result.is_inherited(&query_result.tree, Visible::name()) {
-            "\n\nVisible status was inherited from a parent entity."
-        } else {
-            ""
-        };
 
         ui.list_item_flat_noninteractive(
             list_item::PropertyContent::new("Visible").value_bool_mut(&mut visible),
         )
-        .on_hover_text(format!(
-            "If disabled, the entity won't be shown in the view.{inherited_hint}"
-        ));
+        .on_hover_text("If disabled, the entity won't be shown in the view.");
 
         if visible_before != visible {
-            data_result.save_recursive_override_or_clear_if_redundant(
-                ctx.viewer_ctx,
-                &query_result.tree,
-                &Visible::from(visible),
-            );
+            data_result.save_visible(ctx.viewer_ctx, &query_result.tree, visible);
         }
     }
-
     {
-        let interactive_before = data_result.is_interactive(ctx.viewer_ctx);
+        let interactive_before = data_result.is_interactive();
         let mut interactive = interactive_before;
-
-        let inherited_hint = if data_result.is_inherited(&query_result.tree, Interactive::name()) {
-            "\n\nInteractive status was inherited from a parent entity."
-        } else {
-            ""
-        };
 
         ui.list_item_flat_noninteractive(
             list_item::PropertyContent::new("Interactive").value_bool_mut(&mut interactive),
         )
-        .on_hover_text(format!(
-            "If disabled, the entity will not react to any mouse interaction.{inherited_hint}"
-        ));
+        .on_hover_text("If disabled, the entity will not react to any mouse interaction.");
 
         if interactive_before != interactive {
-            data_result.save_recursive_override_or_clear_if_redundant(
-                ctx.viewer_ctx,
-                &query_result.tree,
-                &Interactive(interactive.into()),
-            );
+            data_result.save_interactive(ctx.viewer_ctx, &query_result.tree, interactive);
         }
     }
 }

@@ -63,7 +63,7 @@ class Mesh3D(Mesh3DExt, Archetype):
     import rerun as rr
 
     rr.init("rerun_example_mesh3d_instancing", spawn=True)
-    rr.set_time_sequence("frame", 0)
+    rr.set_time("frame", sequence=0)
 
     rr.log(
         "shape",
@@ -79,8 +79,8 @@ class Mesh3D(Mesh3DExt, Archetype):
         rr.Boxes3D(half_sizes=[[5.0, 5.0, 5.0]]),
     )
 
-    for i in range(0, 100):
-        rr.set_time_sequence("frame", i)
+    for i in range(100):
+        rr.set_time("frame", sequence=i)
         rr.log(
             "shape",
             rr.InstancePoses3D(
@@ -277,28 +277,36 @@ class Mesh3D(Mesh3DExt, Archetype):
             return ComponentColumnList([])
 
         kwargs = {
-            "vertex_positions": vertex_positions,
-            "triangle_indices": triangle_indices,
-            "vertex_normals": vertex_normals,
-            "vertex_colors": vertex_colors,
-            "vertex_texcoords": vertex_texcoords,
-            "albedo_factor": albedo_factor,
-            "albedo_texture_buffer": albedo_texture_buffer,
-            "albedo_texture_format": albedo_texture_format,
-            "class_ids": class_ids,
+            "Mesh3D:vertex_positions": vertex_positions,
+            "Mesh3D:triangle_indices": triangle_indices,
+            "Mesh3D:vertex_normals": vertex_normals,
+            "Mesh3D:vertex_colors": vertex_colors,
+            "Mesh3D:vertex_texcoords": vertex_texcoords,
+            "Mesh3D:albedo_factor": albedo_factor,
+            "Mesh3D:albedo_texture_buffer": albedo_texture_buffer,
+            "Mesh3D:albedo_texture_format": albedo_texture_format,
+            "Mesh3D:class_ids": class_ids,
         }
         columns = []
 
         for batch in batches:
             arrow_array = batch.as_arrow_array()
 
-            # For primitive arrays, we infer partition size from the input shape.
-            if pa.types.is_primitive(arrow_array.type):
-                param = kwargs[batch.component_descriptor().archetype_field_name]  # type: ignore[index]
+            # For primitive arrays and fixed size list arrays, we infer partition size from the input shape.
+            if pa.types.is_primitive(arrow_array.type) or pa.types.is_fixed_size_list(arrow_array.type):
+                param = kwargs[batch.component_descriptor().component]  # type: ignore[index]
                 shape = np.shape(param)  # type: ignore[arg-type]
+                elem_flat_len = int(np.prod(shape[1:])) if len(shape) > 1 else 1  # type: ignore[redundant-expr,misc]
 
-                batch_length = shape[1] if len(shape) > 1 else 1
-                num_rows = shape[0] if len(shape) >= 1 else 1
+                if pa.types.is_fixed_size_list(arrow_array.type) and arrow_array.type.list_size == elem_flat_len:
+                    # If the product of the last dimensions of the shape are equal to the size of the fixed size list array,
+                    # we have `num_rows` single element batches (each element is a fixed sized list).
+                    # (This should have been already validated by conversion to the arrow_array)
+                    batch_length = 1
+                else:
+                    batch_length = shape[1] if len(shape) > 1 else 1  # type: ignore[redundant-expr,misc]
+
+                num_rows = shape[0] if len(shape) >= 1 else 1  # type: ignore[redundant-expr,misc]
                 sizes = batch_length * np.ones(num_rows)
             else:
                 # For non-primitive types, default to partitioning each element separately.

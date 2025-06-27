@@ -1,9 +1,9 @@
 use std::ops::RangeInclusive;
 
-use egui::{lerp, pos2, remap_clamp, Align2, Color32, Rect, Rgba, Shape, Stroke};
+use egui::{Align2, Color32, Rect, Rgba, Shape, Stroke, lerp, pos2, remap_clamp};
 
-use re_format::next_grid_tick_magnitude_ns;
-use re_log_types::{ResolvedTimeRangeF, Time, TimeReal, TimeType, TimeZone};
+use re_format::next_grid_tick_magnitude_nanos;
+use re_log_types::{ResolvedTimeRangeF, TimeReal, TimeType, TimestampFormat};
 
 use super::time_ranges_ui::TimeRangesUi;
 
@@ -13,7 +13,7 @@ pub fn paint_time_ranges_and_ticks(
     time_area_painter: &egui::Painter,
     line_y_range: RangeInclusive<f32>,
     time_type: TimeType,
-    time_zone_for_timestamps: TimeZone,
+    timestamp_format: TimestampFormat,
 ) {
     let clip_rect = ui.clip_rect();
     let clip_left = clip_rect.left() as f64;
@@ -52,7 +52,7 @@ pub fn paint_time_ranges_and_ticks(
                 &rect,
                 time_type,
                 &time_range,
-                time_zone_for_timestamps,
+                timestamp_format,
             ));
     }
 }
@@ -62,12 +62,12 @@ fn paint_time_range_ticks(
     rect: &Rect,
     time_type: TimeType,
     time_range: &ResolvedTimeRangeF,
-    time_zone_for_timestamps: TimeZone,
+    timestamp_format: TimestampFormat,
 ) -> Vec<Shape> {
     let font_id = egui::TextStyle::Small.resolve(ui.style());
 
     match time_type {
-        TimeType::Time => {
+        TimeType::DurationNs | TimeType::TimestampNs => {
             paint_ticks(
                 ui.ctx(),
                 ui.visuals().dark_mode,
@@ -75,8 +75,8 @@ fn paint_time_range_ticks(
                 rect,
                 &ui.clip_rect(),
                 time_range, // ns
-                next_grid_tick_magnitude_ns,
-                |ns| Time::from_ns_since_epoch(ns).format_time_compact(time_zone_for_timestamps),
+                next_grid_tick_magnitude_nanos,
+                |ns| re_log_types::TimeCell::new(time_type, ns).format_compact(timestamp_format),
             )
         }
 
@@ -113,8 +113,10 @@ fn paint_ticks(
 
     let color_from_alpha = |alpha: f32| -> Color32 {
         if dark_mode {
+            #[expect(clippy::disallowed_methods)] // We are theme-aware here.
             Rgba::from_white_alpha(alpha * alpha).into()
         } else {
+            #[expect(clippy::disallowed_methods)] // We are theme-aware here.
             Rgba::from_black_alpha(alpha).into()
         }
     };
@@ -150,7 +152,7 @@ fn paint_ticks(
         let alpha = remap_clamp(
             spacing_time as f32 * points_per_time,
             expected_text_width..=(3.0 * expected_text_width),
-            0.0..=0.5,
+            0.0..=0.7,
         );
         color_from_alpha(alpha)
     };
@@ -168,9 +170,11 @@ fn paint_ticks(
     let medium_line_strength = line_strength_from_spacing(medium_spacing_time);
     let small_line_strength = line_strength_from_spacing(small_spacing_time);
 
-    let big_line_color = color_from_alpha(0.4 * big_line_strength);
-    let medium_line_color = color_from_alpha(0.4 * medium_line_strength);
-    let small_line_color = color_from_alpha(0.4 * small_line_strength);
+    let base_strength = 0.7;
+
+    let big_line_color = color_from_alpha(base_strength * big_line_strength);
+    let medium_line_color = color_from_alpha(base_strength * medium_line_strength);
+    let small_line_color = color_from_alpha(base_strength * small_line_strength);
 
     let big_text_color = text_color_from_spacing(big_spacing_time);
     let medium_text_color = text_color_from_spacing(medium_spacing_time);

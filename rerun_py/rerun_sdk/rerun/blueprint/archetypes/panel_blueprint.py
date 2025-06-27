@@ -20,9 +20,13 @@ __all__ = ["PanelBlueprint"]
 
 @define(str=False, repr=False, init=False)
 class PanelBlueprint(Archetype):
-    """**Archetype**: Shared state for the 3 collapsible panels."""
+    """
+    **Archetype**: Shared state for the 3 collapsible panels.
 
-    def __init__(self: Any, *, state: blueprint_components.PanelStateLike | None = None):
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    """
+
+    def __init__(self: Any, *, state: blueprint_components.PanelStateLike | None = None) -> None:
         """
         Create a new instance of the PanelBlueprint archetype.
 

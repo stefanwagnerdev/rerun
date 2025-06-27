@@ -5,72 +5,123 @@
 //! to use gRPC types in the rerun viewer codebase. That's why we implement all the
 //! necessary conversion code (in the form of `From` and `TryFrom` traits) in this crate.
 
-mod protobuf_conversions;
-
 pub mod external {
     pub use prost;
 }
 
 // This extra module is needed, because of how imports from different packages are resolved.
-// For example, `rerun.remote_store.v0.EncoderVersion` is resolved to `super::super::remote_store::v0::EncoderVersion`.
+// For example, `rerun.remote_store.v1alpha1.EncoderVersion` is resolved to `super::super::remote_store::v1alpha1::EncoderVersion`.
 // We need an extra module in the path to `common` to make that work.
-// Additionally, the `common` module itself has to exist with a `v0` module inside of it,
+// Additionally, the `common` module itself has to exist with a `v1alpha1` module inside of it,
 // which is the reason for the `common`, `log_msg`, `remote_store`, etc. modules below.
 
 // Note: Be careful with `#[path]` attributes: https://github.com/rust-lang/rust/issues/35016
-mod v0 {
+mod v1alpha1 {
     // Note: `allow(clippy::all)` does NOT allow all lints
     #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
 
-    #[path = "./rerun.common.v0.rs"]
-    pub mod rerun_common_v0;
+    #[path = "./rerun.catalog.v1alpha1.rs"]
+    pub mod rerun_catalog_v1alpha1;
 
-    #[path = "./rerun.log_msg.v0.rs"]
-    pub mod rerun_log_msg_v0;
+    #[path = "./rerun.catalog.v1alpha1.ext.rs"]
+    pub mod rerun_catalog_v1alpha1_ext;
 
-    #[path = "./rerun.remote_store.v0.rs"]
-    pub mod rerun_remote_store_v0;
+    #[path = "./rerun.common.v1alpha1.rs"]
+    pub mod rerun_common_v1alpha1;
 
-    #[path = "./rerun.sdk_comms.v0.rs"]
-    pub mod rerun_sdk_comms_v0;
+    #[path = "./rerun.common.v1alpha1.ext.rs"]
+    pub mod rerun_common_v1alpha1_ext;
+
+    #[path = "./rerun.log_msg.v1alpha1.rs"]
+    pub mod rerun_log_msg_v1alpha1;
+
+    #[path = "./rerun.sdk_comms.v1alpha1.rs"]
+    pub mod rerun_sdk_comms_v1alpha1;
+
+    #[path = "./rerun.manifest_registry.v1alpha1.rs"]
+    pub mod rerun_manifest_registry_v1alpha1;
+
+    #[path = "./rerun.manifest_registry.v1alpha1.ext.rs"]
+    pub mod rerun_manifest_registry_v1alpha1_ext;
+
+    #[path = "./rerun.frontend.v1alpha1.rs"]
+    pub mod rerun_frontend_v1alpha1;
+
+    #[path = "./rerun.frontend.v1alpha1.ext.rs"]
+    pub mod rerun_frontend_v1alpha1_ext;
+
+    #[path = "./rerun.redap_tasks.v1alpha1.rs"]
+    pub mod rerun_redap_tasks_v1alpha1;
+
+    #[path = "./rerun.redap_tasks.v1alpha1.ext.rs"]
+    pub mod rerun_redap_tasks_v1alpha1_ext;
 }
 
 pub mod common {
-    pub mod v0 {
-        pub use crate::v0::rerun_common_v0::*;
+    pub mod v1alpha1 {
+        pub use crate::v1alpha1::rerun_common_v1alpha1::*;
+        pub mod ext {
+            pub use crate::v1alpha1::rerun_common_v1alpha1_ext::*;
+        }
     }
 }
 
 pub mod log_msg {
-    pub mod v0 {
-        pub use crate::v0::rerun_log_msg_v0::*;
+    pub mod v1alpha1 {
+        pub use crate::v1alpha1::rerun_log_msg_v1alpha1::*;
     }
 }
 
-/// Generated types for the remote store gRPC service API v0.
-pub mod remote_store {
+pub mod manifest_registry {
+    #[rustfmt::skip] // keep these constants single line for easy sorting
+    pub mod v1alpha1 {
+        pub use crate::v1alpha1::rerun_manifest_registry_v1alpha1::*;
+        pub mod ext {
+            pub use crate::v1alpha1::rerun_manifest_registry_v1alpha1_ext::*;
+        }
 
-    pub mod v0 {
-        pub use crate::v0::rerun_remote_store_v0::*;
-
-        /// Recording catalog mandatory field names. All mandatory metadata fields are prefixed
+        /// `DatasetManifest` mandatory field names. All mandatory metadata fields are prefixed
         /// with "rerun_" to avoid conflicts with user-defined fields.
-        pub const CATALOG_ID_FIELD_NAME: &str = "rerun_recording_id";
-        pub const CATALOG_APP_ID_FIELD_NAME: &str = "rerun_application_id";
-        pub const CATALOG_START_TIME_FIELD_NAME: &str = "rerun_start_time";
-        pub const CATALOG_DESCRIPTION_FIELD_NAME: &str = "rerun_description";
-        pub const CATALOG_RECORDING_TYPE_FIELD_NAME: &str = "rerun_recording_type";
-        pub const CATALOG_STORAGE_URL_FIELD_NAME: &str = "rerun_storage_url";
-        pub const CATALOG_REGISTRATION_TIME_FIELD_NAME: &str = "rerun_registration_time";
-        pub const CATALOG_ROW_ID_FIELD_NAME: &str = "rerun_row_id";
+        pub const DATASET_MANIFEST_ID_FIELD_NAME: &str = "rerun_partition_id";
+        pub const DATASET_MANIFEST_PARTITION_MANIFEST_UPDATED_AT_FIELD_NAME: &str = "rerun_partition_manifest_updated_at";
+        pub const DATASET_MANIFEST_RECORDING_TYPE_FIELD_NAME: &str = "rerun_partition_type";
+        pub const DATASET_MANIFEST_REGISTRATION_TIME_FIELD_NAME: &str = "rerun_registration_time";
+        pub const DATASET_MANIFEST_START_TIME_FIELD_NAME: &str = "rerun_start_time";
+        pub const DATASET_MANIFEST_STORAGE_URL_FIELD_NAME: &str = "rerun_storage_url";
+    }
+}
+
+pub mod catalog {
+    pub mod v1alpha1 {
+        pub use crate::v1alpha1::rerun_catalog_v1alpha1::*;
+        pub mod ext {
+            pub use crate::v1alpha1::rerun_catalog_v1alpha1_ext::*;
+        }
+    }
+}
+
+pub mod frontend {
+    pub mod v1alpha1 {
+        pub use crate::v1alpha1::rerun_frontend_v1alpha1::*;
+        pub mod ext {
+            pub use crate::v1alpha1::rerun_frontend_v1alpha1_ext::*;
+        }
     }
 }
 
 pub mod sdk_comms {
-    pub mod v0 {
-        pub use crate::v0::rerun_sdk_comms_v0::*;
+    pub mod v1alpha1 {
+        pub use crate::v1alpha1::rerun_sdk_comms_v1alpha1::*;
     }
 }
+
+pub mod redap_tasks {
+    pub mod v1alpha1 {
+        pub use crate::v1alpha1::rerun_redap_tasks_v1alpha1::*;
+    }
+}
+
+// ---
 
 #[derive(Debug, thiserror::Error)]
 pub enum TypeConversionError {
@@ -89,14 +140,23 @@ pub enum TypeConversionError {
         reason: String,
     },
 
+    #[error("failed to parse timestamp: {0}")]
+    InvalidTime(#[from] jiff::Error),
+
     #[error("failed to decode: {0}")]
     DecodeError(#[from] prost::DecodeError),
 
     #[error("failed to encode: {0}")]
     EncodeError(#[from] prost::EncodeError),
 
+    #[error("failed to convert arrow data: {0}")]
+    ArrowError(#[from] arrow::error::ArrowError),
+
     #[error("{0}")]
     UnknownEnumValue(#[from] prost::UnknownEnumValue),
+
+    #[error("could not parse url: {0}")]
+    UrlParseError(#[from] url::ParseError),
 }
 
 impl TypeConversionError {
@@ -121,6 +181,21 @@ impl TypeConversionError {
     }
 }
 
+impl From<TypeConversionError> for tonic::Status {
+    #[inline]
+    fn from(value: TypeConversionError) -> Self {
+        Self::invalid_argument(value.to_string())
+    }
+}
+
+#[cfg(feature = "py")]
+impl From<TypeConversionError> for pyo3::PyErr {
+    #[inline]
+    fn from(value: TypeConversionError) -> Self {
+        pyo3::exceptions::PyValueError::new_err(value.to_string())
+    }
+}
+
 #[macro_export]
 macro_rules! missing_field {
     ($type:ty, $field:expr $(,)?) => {
@@ -135,10 +210,13 @@ macro_rules! invalid_field {
     };
 }
 
+// ---
+
+// TODO(cmc): move this somewhere else
 mod sizes {
     use re_byte_size::SizeBytes;
 
-    impl SizeBytes for crate::log_msg::v0::LogMsg {
+    impl SizeBytes for crate::log_msg::v1alpha1::LogMsg {
         #[inline]
         fn heap_size_bytes(&self) -> u64 {
             let Self { msg } = self;
@@ -150,7 +228,7 @@ mod sizes {
         }
     }
 
-    impl SizeBytes for crate::log_msg::v0::log_msg::Msg {
+    impl SizeBytes for crate::log_msg::v1alpha1::log_msg::Msg {
         #[inline]
         fn heap_size_bytes(&self) -> u64 {
             match self {
@@ -163,7 +241,7 @@ mod sizes {
         }
     }
 
-    impl SizeBytes for crate::log_msg::v0::SetStoreInfo {
+    impl SizeBytes for crate::log_msg::v1alpha1::SetStoreInfo {
         #[inline]
         fn heap_size_bytes(&self) -> u64 {
             let Self { row_id, info } = self;
@@ -172,7 +250,7 @@ mod sizes {
         }
     }
 
-    impl SizeBytes for crate::common::v0::Tuid {
+    impl SizeBytes for crate::common::v1alpha1::Tuid {
         #[inline]
         fn heap_size_bytes(&self) -> u64 {
             let Self { inc, time_ns } = self;
@@ -181,28 +259,24 @@ mod sizes {
         }
     }
 
-    impl SizeBytes for crate::log_msg::v0::StoreInfo {
+    impl SizeBytes for crate::log_msg::v1alpha1::StoreInfo {
         #[inline]
         fn heap_size_bytes(&self) -> u64 {
             let Self {
                 application_id,
                 store_id,
-                is_official_example,
-                started,
                 store_source,
                 store_version,
             } = self;
 
             application_id.heap_size_bytes()
                 + store_id.heap_size_bytes()
-                + is_official_example.heap_size_bytes()
-                + started.heap_size_bytes()
                 + store_source.heap_size_bytes()
                 + store_version.heap_size_bytes()
         }
     }
 
-    impl SizeBytes for crate::common::v0::ApplicationId {
+    impl SizeBytes for crate::common::v1alpha1::ApplicationId {
         #[inline]
         fn heap_size_bytes(&self) -> u64 {
             let Self { id } = self;
@@ -211,7 +285,7 @@ mod sizes {
         }
     }
 
-    impl SizeBytes for crate::common::v0::StoreId {
+    impl SizeBytes for crate::common::v1alpha1::StoreId {
         #[inline]
         fn heap_size_bytes(&self) -> u64 {
             let Self { kind, id } = self;
@@ -220,16 +294,16 @@ mod sizes {
         }
     }
 
-    impl SizeBytes for crate::common::v0::Time {
+    impl SizeBytes for crate::common::v1alpha1::TableId {
         #[inline]
         fn heap_size_bytes(&self) -> u64 {
-            let Self { nanos_since_epoch } = self;
+            let Self { id } = self;
 
-            nanos_since_epoch.heap_size_bytes()
+            id.heap_size_bytes()
         }
     }
 
-    impl SizeBytes for crate::log_msg::v0::StoreSource {
+    impl SizeBytes for crate::log_msg::v1alpha1::StoreSource {
         #[inline]
         fn heap_size_bytes(&self) -> u64 {
             let Self { kind, extra } = self;
@@ -238,16 +312,16 @@ mod sizes {
         }
     }
 
-    impl SizeBytes for crate::log_msg::v0::StoreSourceExtra {
+    impl SizeBytes for crate::log_msg::v1alpha1::StoreSourceExtra {
         #[inline]
         fn heap_size_bytes(&self) -> u64 {
             let Self { payload } = self;
 
-            payload.heap_size_bytes()
+            payload.len() as _
         }
     }
 
-    impl SizeBytes for crate::log_msg::v0::StoreVersion {
+    impl SizeBytes for crate::log_msg::v1alpha1::StoreVersion {
         #[inline]
         fn heap_size_bytes(&self) -> u64 {
             let Self { crate_version_bits } = self;
@@ -256,11 +330,12 @@ mod sizes {
         }
     }
 
-    impl SizeBytes for crate::log_msg::v0::ArrowMsg {
+    impl SizeBytes for crate::log_msg::v1alpha1::ArrowMsg {
         #[inline]
         fn heap_size_bytes(&self) -> u64 {
             let Self {
                 store_id,
+                chunk_id,
                 compression,
                 uncompressed_size,
                 encoding,
@@ -268,14 +343,15 @@ mod sizes {
             } = self;
 
             store_id.heap_size_bytes()
+                + chunk_id.heap_size_bytes()
                 + compression.heap_size_bytes()
                 + uncompressed_size.heap_size_bytes()
                 + encoding.heap_size_bytes()
-                + payload.heap_size_bytes()
+                + payload.len() as u64
         }
     }
 
-    impl SizeBytes for crate::log_msg::v0::BlueprintActivationCommand {
+    impl SizeBytes for crate::log_msg::v1alpha1::BlueprintActivationCommand {
         #[inline]
         fn heap_size_bytes(&self) -> u64 {
             let Self {
@@ -287,6 +363,19 @@ mod sizes {
             blueprint_id.heap_size_bytes()
                 + make_active.heap_size_bytes()
                 + make_default.heap_size_bytes()
+        }
+    }
+
+    impl SizeBytes for crate::common::v1alpha1::DataframePart {
+        #[inline]
+        fn heap_size_bytes(&self) -> u64 {
+            let Self {
+                encoder_version,
+                payload,
+            } = self;
+
+            encoder_version.heap_size_bytes()
+                + payload.as_ref().map_or(0, |payload| payload.len() as u64)
         }
     }
 }

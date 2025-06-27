@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -22,11 +21,10 @@ class Position3D(datatypes.Vec3D, ComponentMixin):
     # You can define your own __init__ function as a member of Position3DExt in position3d_ext.py
 
     # Note: there are no fields here because Position3D delegates to datatypes.Vec3D
-    pass
 
 
 class Position3DBatch(datatypes.Vec3DBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.Position3D")
+    _COMPONENT_TYPE: str = "rerun.components.Position3D"
 
 
 # This is patched in late to avoid circular dependencies.

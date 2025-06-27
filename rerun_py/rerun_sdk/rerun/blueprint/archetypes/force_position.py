@@ -21,7 +21,11 @@ __all__ = ["ForcePosition"]
 
 @define(str=False, repr=False, init=False)
 class ForcePosition(Archetype):
-    """**Archetype**: Similar to gravity, this force pulls nodes towards a specific position."""
+    """
+    **Archetype**: Similar to gravity, this force pulls nodes towards a specific position.
+
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    """
 
     def __init__(
         self: Any,
@@ -29,7 +33,7 @@ class ForcePosition(Archetype):
         enabled: datatypes.BoolLike | None = None,
         strength: datatypes.Float64Like | None = None,
         position: datatypes.Vec2DLike | None = None,
-    ):
+    ) -> None:
         """
         Create a new instance of the ForcePosition archetype.
 

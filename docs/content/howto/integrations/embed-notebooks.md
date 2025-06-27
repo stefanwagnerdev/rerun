@@ -24,7 +24,7 @@ This installs both [rerun-sdk](https://pypi.org/project/rerun-sdk/) and [rerun-n
 ## The APIs
 
 When using the Rerun logging APIs, by default, the logged messages are buffered in-memory until
-you send them to a sink such as via `rr.connect()` or `rr.save()`.
+you send them to a sink such as via `rr.connect_grpc()` or `rr.save()`.
 
 When using Rerun in a notebook, rather than using the other sinks, you have the option to use [`rr.notebook_show()`](https://ref.rerun.io/docs/python/stable/common/initialization_functions/#rerun.notebook_show). This method embeds the [web viewer](./embed-web.md) using the IPython `display` mechanism in the cell output, and sends the current recording data to it.
 
@@ -58,7 +58,7 @@ rr.notebook_show()
   <source media="(max-width: 1200px)" srcset="https://static.rerun.io/notebook_example/e47920b7ca7988aba305d73b2aea2da7b81c93e3/1200w.png">
 </picture>
 
-This is similar to calling `rr.connect()` or `rr.serve()` in that it configures the Rerun SDK to send data to a viewer instance.
+This is similar to calling `rr.connect_grpc()` or `rr.serve()` in that it configures the Rerun SDK to send data to a viewer instance.
 
 Note that the call to `rr.notebook_show()` drains the recording of its data. This means that any subsequent calls to `rr.notebook_show()`
 will not result in the same data being displayed, because it has already been removed from the recording.
@@ -71,6 +71,37 @@ The `notebook_show()` method also takes optional arguments for specifying the wi
 ```python
 rr.notebook_show(width=400, height=400)
 ```
+
+## Reacting to events in the Viewer
+
+It is possible to register a callback to be triggered when certain Viewer events happen.
+
+For example, here is how you can track which entities are currently selected in the Viewer:
+
+```python
+from rerun.notebook import Viewer, ViewerEvent
+
+selected_entities = []
+
+def on_event(event: ViewerEvent):
+  global selected_entities
+  selected_entities = [] # clear the list
+
+  if event.type == "selection_change":
+    for item in event.items:
+      if item.type == "entity":
+        selected_entities.append(item.entity_path)
+
+viewer = Viewer()
+viewer.on_event(on_event)
+
+display(viewer)
+```
+
+Whenever an entity is selected in the Viewer, `selected_entities.value` changes. The payload includes other useful information,
+such as the position of the selection within a 2D or 3D view.
+
+For a more complete example, see [callbacks.ipynb](https://github.com/rerun-io/rerun/blob/main/rerun_notebook/callbacks.ipynb).
 
 ## Working with blueprints
 
@@ -143,7 +174,7 @@ STEPS = 100
 twists = math.pi * np.sin(np.linspace(0, math.tau, STEPS)) / 4
 for t in range(STEPS):
     sleep(0.05)  # delay to simulate a long-running computation
-    rr.set_time_sequence("step", t)
+    rr.set_time("step", sequence=t)
     cube = build_color_grid(10, 10, 10, twist=twists[t])
     rr.log("cube", rr.Points3D(cube.positions, colors=cube.colors, radii=0.5))
 ```

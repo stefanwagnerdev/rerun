@@ -5,14 +5,14 @@
 
 from __future__ import annotations
 
-from typing import Literal, Sequence, Union
+from collections.abc import Sequence
+from typing import Literal, Union
 
 import pyarrow as pa
 
 from ..._baseclasses import (
     BaseBatch,
     ComponentBatchMixin,
-    ComponentDescriptor,
 )
 
 __all__ = ["MapProvider", "MapProviderArrayLike", "MapProviderBatch", "MapProviderLike"]
@@ -76,7 +76,7 @@ MapProviderArrayLike = Union[MapProviderLike, Sequence[MapProviderLike]]
 
 class MapProviderBatch(BaseBatch[MapProviderArrayLike], ComponentBatchMixin):
     _ARROW_DATATYPE = pa.uint8()
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.blueprint.components.MapProvider")
+    _COMPONENT_TYPE: str = "rerun.blueprint.components.MapProvider"
 
     @staticmethod
     def _native_to_pa_array(data: MapProviderArrayLike, data_type: pa.DataType) -> pa.Array:

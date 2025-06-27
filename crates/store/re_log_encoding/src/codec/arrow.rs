@@ -2,48 +2,29 @@ use super::CodecError;
 
 use arrow::array::RecordBatch as ArrowRecordBatch;
 
-// TODO(#3741): switch to arrow1 once <https://github.com/apache/arrow-rs/issues/6803> is released
-//
-// TODO(#8733): <https://github.com/apache/arrow-rs/issues/6803> shipped in a patch release and was supposed
-// to fix the encoding issue with list-arrays, but apparently didn't.
-// We have to wait for a major Arrow update (which requires Lance/Datafusion/etc to follow first)
-// before we can try to enable this again.
-// This is becoming problematic, as the arrow2 serializer loses some arbitrary amount of schema
-// metadata during transit.
-const SERIALIZE_WITH_ARROW_1: bool = false;
-const DESERIALIZE_WITH_ARROW_1: bool = true; // Both arrow1 and arrow2 should be working fine
-
 /// Helper function that serializes given arrow schema and record batch into bytes
 /// using Arrow IPC format.
+#[tracing::instrument(level = "trace", skip_all)]
 pub(crate) fn write_arrow_to_bytes<W: std::io::Write>(
     writer: &mut W,
     batch: &ArrowRecordBatch,
 ) -> Result<(), CodecError> {
-    if SERIALIZE_WITH_ARROW_1 {
-        #[allow(clippy::disallowed_types)] // it's behind a disabled feature flag
-        let mut sw = arrow::ipc::writer::StreamWriter::try_new(writer, batch.schema_ref())
-            .map_err(CodecError::ArrowSerialization)?;
-        sw.write(batch).map_err(CodecError::ArrowSerialization)?;
-        sw.finish().map_err(CodecError::ArrowSerialization)?;
-    } else {
-        let schema = arrow2::datatypes::Schema::from(batch.schema());
-        let chunk = arrow2::chunk::Chunk::new(
-            batch
-                .columns()
-                .iter()
-                .map(|c| -> Box<dyn arrow2::array::Array> { c.clone().into() })
-                .collect(),
-        );
+    re_tracing::profile_function!();
 
-        let mut writer = arrow2::io::ipc::write::StreamWriter::new(writer, Default::default());
-        writer
-            .start(&schema, None)
-            .map_err(CodecError::Arrow2Serialization)?;
-        writer
-            .write(&chunk, None)
-            .map_err(CodecError::Arrow2Serialization)?;
-        writer.finish().map_err(CodecError::Arrow2Serialization)?;
+    let schema = batch.schema_ref().as_ref();
+
+    let mut sw = {
+        let _span = tracing::trace_span!("schema").entered();
+        arrow::ipc::writer::StreamWriter::try_new(writer, schema)
+            .map_err(CodecError::ArrowSerialization)?
+    };
+
+    {
+        let _span = tracing::trace_span!("data").entered();
+        sw.write(batch).map_err(CodecError::ArrowSerialization)?;
     }
+
+    sw.finish().map_err(CodecError::ArrowSerialization)?;
 
     Ok(())
 }
@@ -52,43 +33,23 @@ pub(crate) fn write_arrow_to_bytes<W: std::io::Write>(
 /// using Arrow IPC format.
 ///
 /// Returns only the first record batch in the stream.
+#[tracing::instrument(level = "trace", skip_all)]
 pub(crate) fn read_arrow_from_bytes<R: std::io::Read>(
     reader: &mut R,
 ) -> Result<ArrowRecordBatch, CodecError> {
-    if DESERIALIZE_WITH_ARROW_1 {
-        let mut stream = arrow::ipc::reader::StreamReader::try_new(reader, None)
-            .map_err(CodecError::ArrowDeserialization)?;
+    re_tracing::profile_function!();
 
-        stream
-            .next()
-            .ok_or(CodecError::MissingRecordBatch)?
-            .map_err(CodecError::ArrowDeserialization)
-    } else {
-        use arrow2::io::ipc;
+    let mut stream = {
+        let _span = tracing::trace_span!("schema").entered();
+        arrow::ipc::reader::StreamReader::try_new(reader, None)
+            .map_err(CodecError::ArrowDeserialization)?
+    };
 
-        let metadata =
-            ipc::read::read_stream_metadata(reader).map_err(CodecError::Arrow2Serialization)?;
-        let mut stream = ipc::read::StreamReader::new(reader, metadata, None);
-
-        let schema = stream.schema().clone();
-        // there should be at least one record batch in the stream
-        let stream_state = stream
-            .next()
-            .ok_or(CodecError::MissingRecordBatch)?
-            .map_err(CodecError::Arrow2Serialization)?;
-
-        match stream_state {
-            ipc::read::StreamState::Waiting => Err(CodecError::UnexpectedStreamState),
-            ipc::read::StreamState::Some(chunk) => {
-                let batch = ArrowRecordBatch::try_new(
-                    schema.into(),
-                    chunk.columns().iter().map(|c| c.clone().into()).collect(),
-                )
-                .map_err(CodecError::ArrowDeserialization)?;
-                Ok(batch)
-            }
-        }
-    }
+    let _span = tracing::trace_span!("data").entered();
+    stream
+        .next()
+        .ok_or(CodecError::MissingRecordBatch)?
+        .map_err(CodecError::ArrowDeserialization)
 }
 
 #[cfg(feature = "encoder")]
@@ -98,17 +59,24 @@ pub(crate) struct Payload {
 }
 
 #[cfg(feature = "encoder")]
+#[tracing::instrument(level = "trace", skip_all)]
 pub(crate) fn encode_arrow(
     batch: &ArrowRecordBatch,
     compression: crate::Compression,
 ) -> Result<Payload, crate::encoder::EncodeError> {
+    re_tracing::profile_function!();
+
     let mut uncompressed = Vec::new();
     write_arrow_to_bytes(&mut uncompressed, batch)?;
     let uncompressed_size = uncompressed.len();
 
     let data = match compression {
         crate::Compression::Off => uncompressed,
-        crate::Compression::LZ4 => lz4_flex::block::compress(&uncompressed),
+        crate::Compression::LZ4 => {
+            re_tracing::profile_scope!("lz4::compress");
+            let _span = tracing::trace_span!("lz4::compress").entered();
+            lz4_flex::block::compress(&uncompressed)
+        }
     };
 
     Ok(Payload {
@@ -117,21 +85,51 @@ pub(crate) fn encode_arrow(
     })
 }
 
+// TODO(cmc): can we use the File-oriented APIs in order to re-use the transport buffer as backing
+// storage for the final RecordBatch?
+// See e.g. https://github.com/apache/arrow-rs/blob/b8b2f21f6a8254224d37a1e2d231b6b1e1767648/arrow/examples/zero_copy_ipc.rs
 #[cfg(feature = "decoder")]
+#[tracing::instrument(level = "trace", skip_all)]
 pub(crate) fn decode_arrow(
     data: &[u8],
     uncompressed_size: usize,
     compression: crate::Compression,
 ) -> Result<ArrowRecordBatch, crate::decoder::DecodeError> {
-    let mut uncompressed = Vec::new();
-    let data = match compression {
-        crate::Compression::Off => data,
-        crate::Compression::LZ4 => {
-            uncompressed.resize(uncompressed_size, 0);
-            lz4_flex::block::decompress_into(data, &mut uncompressed)?;
-            uncompressed.as_slice()
-        }
-    };
+    if true {
+        let mut uncompressed = Vec::new();
+        let data = match compression {
+            crate::Compression::Off => data,
+            crate::Compression::LZ4 => {
+                re_tracing::profile_scope!("LZ4-decompress");
+                let _span = tracing::trace_span!("lz4::decompress").entered();
+                uncompressed.resize(uncompressed_size, 0);
+                lz4_flex::block::decompress_into(data, &mut uncompressed)?;
+                uncompressed.as_slice()
+            }
+        };
 
-    Ok(read_arrow_from_bytes(&mut &data[..])?)
+        Ok(read_arrow_from_bytes(&mut &data[..])?)
+    } else {
+        // Zero-alloc path: not used today because allocations are bottlenecked on other things,
+        // but I want to keep this around for later.
+
+        use std::cell::RefCell;
+        thread_local! {
+            static BUFFER: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+        }
+
+        BUFFER.with_borrow_mut(|uncompressed| {
+            let data = match compression {
+                crate::Compression::Off => data,
+                crate::Compression::LZ4 => {
+                    let _span = tracing::trace_span!("lz4::decompress").entered();
+                    uncompressed.resize(uncompressed_size, 0);
+                    lz4_flex::block::decompress_into(data, uncompressed)?;
+                    uncompressed.as_slice()
+                }
+            };
+
+            Ok(read_arrow_from_bytes(&mut &data[..])?)
+        })
+    }
 }

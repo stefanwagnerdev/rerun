@@ -17,20 +17,6 @@ mod file_sink;
 #[cfg(feature = "stream_from_http")]
 pub mod stream_rrd_from_http;
 
-/// How to handle version mismatches during decoding.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum VersionPolicy {
-    /// Warn if the versions don't match, but continue loading.
-    ///
-    /// We usually use this for loading `.rrd` recordings.
-    Warn,
-
-    /// Return an error if the versions aren't compatible.
-    ///
-    /// We usually use this for tests, and for loading `.rbl` blueprint files.
-    Error,
-}
-
 // ---------------------------------------------------------------------
 
 #[cfg(feature = "encoder")]
@@ -123,7 +109,9 @@ pub enum OptionsError {
     UnknownCompression(u8),
 
     // TODO(jan): Remove this at some point, realistically 1-2 releases after 0.23
-    #[error("Attempted to use the removed MsgPack serializer, which is no longer supported")]
+    #[error(
+        "You are trying to load an old .rrd file that's not supported by this version of Rerun."
+    )]
     RemovedMsgPackSerializer,
 
     #[error("Unknown serializer: {0}")]

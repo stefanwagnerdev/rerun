@@ -1,4 +1,4 @@
-use crate::{codegen::Target, Objects, Reporter};
+use crate::{Objects, Reporter, codegen::Target};
 
 /// A high-level representation of the contents of a flatbuffer docstring.
 #[derive(Debug, Clone, Default)]
@@ -71,11 +71,7 @@ impl Docs {
             .iter()
             .filter_map(
                 |(t, line)| {
-                    if t == tag {
-                        Some(line.as_str())
-                    } else {
-                        None
-                    }
+                    if t == tag { Some(line.as_str()) } else { None }
                 },
             )
             .collect()
@@ -187,7 +183,7 @@ fn find_and_recommend_doclinks(
                 && !matches!(content, "ViewContents" | "VisibleTimeRanges" | "QueryExpression")
 
                 // In some blueprint code we refer to stuff in Rerun.
-                && !matches!(content, "ChunkStore" | "ContainerId" | "EntityPathFilter" | "Spatial2DView" | "ViewId" | "View")
+                && !matches!(content, "ChunkStore" | "ContainerId" | "EntityPathFilter" | "Spatial2DView" | "ViewId" | "View" | "ArchetypeName")
 
                 // Doc links to OpenStreetMap may show up
                 && !matches!(content, "OpenStreetMap");
@@ -376,6 +372,13 @@ mod doclink_translation {
 
             scope = object.scope().unwrap_or_default();
             is_unreleased = object.is_attr_set(crate::ATTR_DOCS_UNRELEASED);
+
+            if let Some(deprecation_summary) = object.deprecation_summary() {
+                return Err(format!(
+                    "Found doclink to deprecated object '{}': {deprecation_summary}",
+                    object.fqname,
+                ));
+            }
         }
 
         Ok(match target {
@@ -397,8 +400,8 @@ mod doclink_translation {
 
                 if let Some(field_or_enum_name) = field_or_enum_name {
                     format!(
-                            "[`{kind_and_type}::{field_or_enum_name}`][crate::{object_path}::{field_or_enum_name}]"
-                        )
+                        "[`{kind_and_type}::{field_or_enum_name}`][crate::{object_path}::{field_or_enum_name}]"
+                    )
                 } else {
                     format!("[`{kind_and_type}`][crate::{object_path}]")
                 }
@@ -411,7 +414,9 @@ mod doclink_translation {
                     format!("rerun.{scope}.{kind_and_type}")
                 };
                 if let Some(field_or_enum_name) = field_or_enum_name {
-                    format!("[`{kind_and_type}.{field_or_enum_name}`][{object_path}.{field_or_enum_name}]")
+                    format!(
+                        "[`{kind_and_type}.{field_or_enum_name}`][{object_path}.{field_or_enum_name}]"
+                    )
                 } else {
                     format!("[`{kind_and_type}`][{object_path}]")
                 }
@@ -470,9 +475,10 @@ mod doclink_translation {
 #[cfg(test)]
 mod tests {
     use crate::{
+        Attributes, Docs, Object, ObjectKind, Objects,
         codegen::Target,
         docs::doclink_translation::{tokenize, translate_doc_line},
-        Attributes, Docs, Object, ObjectKind, Objects,
+        objects::State,
     };
 
     fn test_objects() -> Objects {
@@ -488,6 +494,7 @@ mod tests {
                     docs: Docs::default(),
                     kind: ObjectKind::View,
                     attrs: Attributes::default(),
+                    state: State::Stable,
                     fields: Vec::new(),
                     class: crate::ObjectClass::Struct,
                     datatype: None,
@@ -534,32 +541,17 @@ mod tests {
         );
 
         assert_eq!(
-            translate_doc_line(
-                &reporter,
-                &objects,
-                input,
-                Target::Python
-            ),
+            translate_doc_line(&reporter, &objects, input, Target::Python),
             "A vector `[1, 2, 3]` and a doclink [`views.Spatial2DView`][rerun.blueprint.views.Spatial2DView] and a [url](www.rerun.io)."
         );
 
         assert_eq!(
-            translate_doc_line(
-                &reporter,
-                &objects,
-                input,
-                Target::Rust
-            ),
+            translate_doc_line(&reporter, &objects, input, Target::Rust),
             "A vector `[1, 2, 3]` and a doclink [`views::Spatial2DView`][crate::blueprint::views::Spatial2DView] and a [url](www.rerun.io)."
         );
 
         assert_eq!(
-            translate_doc_line(
-                &reporter,
-                &objects,
-                input,
-                Target::WebDocsMarkdown
-            ),
+            translate_doc_line(&reporter, &objects, input, Target::WebDocsMarkdown),
             "A vector `[1, 2, 3]` and a doclink [`views.Spatial2DView`](https://rerun.io/docs/reference/types/views/spatial2d_view) and a [url](www.rerun.io)."
         );
     }
@@ -569,46 +561,25 @@ mod tests {
         let objects = test_objects();
         let (_report, reporter) = crate::report::init();
 
-        let input =
-            "A vector `[1, 2, 3]` and a doclink [views.Spatial2DView.position] and a [url](www.rerun.io).";
+        let input = "A vector `[1, 2, 3]` and a doclink [views.Spatial2DView.position] and a [url](www.rerun.io).";
 
         assert_eq!(
-            translate_doc_line(
-                &reporter,
-                &objects,
-                input,
-                Target::Cpp
-            ),
+            translate_doc_line(&reporter, &objects, input, Target::Cpp),
             "A vector `[1, 2, 3]` and a doclink `views::Spatial2DView::position` and a [url](www.rerun.io)."
         );
 
         assert_eq!(
-            translate_doc_line(
-                &reporter,
-                &objects,
-                input,
-                Target::Python
-            ),
+            translate_doc_line(&reporter, &objects, input, Target::Python),
             "A vector `[1, 2, 3]` and a doclink [`views.Spatial2DView.position`][rerun.blueprint.views.Spatial2DView.position] and a [url](www.rerun.io)."
         );
 
         assert_eq!(
-            translate_doc_line(
-                &reporter,
-                &objects,
-                input,
-                Target::Rust
-            ),
+            translate_doc_line(&reporter, &objects, input, Target::Rust),
             "A vector `[1, 2, 3]` and a doclink [`views::Spatial2DView::position`][crate::blueprint::views::Spatial2DView::position] and a [url](www.rerun.io)."
         );
 
         assert_eq!(
-            translate_doc_line(
-                &reporter,
-                &objects,
-                input,
-                Target::WebDocsMarkdown
-            ),
+            translate_doc_line(&reporter, &objects, input, Target::WebDocsMarkdown),
             "A vector `[1, 2, 3]` and a doclink [`views.Spatial2DView#position`](https://rerun.io/docs/reference/types/views/spatial2d_view) and a [url](www.rerun.io)."
         );
     }

@@ -21,7 +21,11 @@ __all__ = ["TensorSliceSelection"]
 
 @define(str=False, repr=False, init=False)
 class TensorSliceSelection(Archetype):
-    """**Archetype**: Specifies a 2D slice of a tensor."""
+    """
+    **Archetype**: Specifies a 2D slice of a tensor.
+
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    """
 
     def __init__(
         self: Any,
@@ -30,7 +34,7 @@ class TensorSliceSelection(Archetype):
         height: datatypes.TensorDimensionSelectionLike | None = None,
         indices: datatypes.TensorDimensionIndexSelectionArrayLike | None = None,
         slider: blueprint_datatypes.TensorDimensionIndexSliderArrayLike | None = None,
-    ):
+    ) -> None:
         """
         Create a new instance of the TensorSliceSelection archetype.
 

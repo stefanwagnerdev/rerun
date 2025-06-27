@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from ..._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 from ...blueprint import datatypes as blueprint_datatypes
@@ -16,19 +15,20 @@ __all__ = ["ComponentColumnSelector", "ComponentColumnSelectorBatch"]
 
 
 class ComponentColumnSelector(blueprint_datatypes.ComponentColumnSelector, ComponentMixin):
-    """**Component**: Describe a component column to be selected in the dataframe view."""
+    """
+    **Component**: Describe a component column to be selected in the dataframe view.
+
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    """
 
     _BATCH_TYPE = None
     # You can define your own __init__ function as a member of ComponentColumnSelectorExt in component_column_selector_ext.py
 
     # Note: there are no fields here because ComponentColumnSelector delegates to datatypes.ComponentColumnSelector
-    pass
 
 
 class ComponentColumnSelectorBatch(blueprint_datatypes.ComponentColumnSelectorBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor(
-        "rerun.blueprint.components.ComponentColumnSelector"
-    )
+    _COMPONENT_TYPE: str = "rerun.blueprint.components.ComponentColumnSelector"
 
 
 # This is patched in late to avoid circular dependencies.

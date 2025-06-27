@@ -129,8 +129,19 @@ typedef struct rr_spawn_options {
     /// Defaults to `75%` if null.
     rr_string memory_limit;
 
+    /// An upper limit on how much memory the gRPC server running
+    /// in the same process as the Rerun Viewer should use.
+    /// When this limit is reached, Rerun will drop the oldest data.
+    /// Example: `16GB` or `50%` (of system total).
+    ///
+    /// Defaults to `0B` if null.
+    rr_string server_memory_limit;
+
     /// Hide the normal Rerun welcome screen.
     bool hide_welcome_screen;
+
+    /// Detach Rerun Viewer process from the application process.
+    bool detach_process;
 
     /// Specifies the name of the Rerun executable.
     ///
@@ -190,22 +201,21 @@ typedef struct rr_component_descriptor {
     /// Null if the data wasn't logged through an archetype.
     ///
     /// Example: `rerun.archetypes.Points3D`.
-    rr_string archetype_name;
+    rr_string archetype;
 
     /// Optional name of the field within `Archetype` associated with this data.
     ///
     /// Null if the data wasn't logged through an archetype.
     ///
     /// Example: `positions`.
-    rr_string archetype_field_name;
+    rr_string component;
 
-    /// Semantic name associated with this data.
+    /// Semantic type associated with this data.
     ///
-    /// This is fully implied by `archetype_name` and `archetype_field`, but
-    /// included for semantic convenience.
+    /// This is fully implied by the `component`, but included for semantic convenience.
     ///
     /// Example: `rerun.components.Position3D`.
-    rr_string component_name;
+    rr_string component_type;
 } rr_component_descriptor;
 
 /// Definition of a component type that can be registered.
@@ -271,11 +281,16 @@ enum {
 typedef uint32_t rr_time_type;
 
 enum {
-    /// Normal wall time.
-    RR_TIME_TYPE_TIME = 0,
+    // 0 no longer in use
 
     /// Used e.g. for frames in a film.
     RR_TIME_TYPE_SEQUENCE = 1,
+
+    /// Nanoseconds.
+    RR_TIME_TYPE_DURATION = 2,
+
+    /// Nanoseconds since Unix epoch (1970-01-01 00:00:00 UTC).
+    RR_TIME_TYPE_TIMESTAMP = 3,
 };
 
 /// Definition of a timeline.
@@ -298,6 +313,52 @@ typedef struct rr_time_column {
     /// The sorting order of the `times` array.
     rr_sorting_status sorting_status;
 } rr_time_column;
+
+/// Log sink which streams messages to a gRPC server.
+///
+/// The behavior of this sink is the same as the one set by `rr_recording_stream_connect_grpc`.
+typedef struct rr_grpc_sink {
+    /// A Rerun gRPC URL.
+    ///
+    /// The scheme must be one of `rerun://`, `rerun+http://`, or `rerun+https://`,
+    /// and the pathname must be `/proxy`.
+    ///
+    /// The default is `rerun+http://127.0.0.1:9876/proxy`.
+    rr_string url;
+
+    /// The minimum time the SDK will wait during a flush before potentially
+    /// dropping data if progress is not being made. Passing a negative value indicates no timeout,
+    /// and can cause a call to `flush` to block indefinitely.
+    float flush_timeout_sec;
+} rr_grpc_sink;
+
+/// Log sink which writes messages to a file.
+typedef struct rr_file_sink {
+    /// Path to the output file.
+    rr_string path;
+} rr_file_sink;
+
+enum {
+    RR_LOG_SINK_KIND_GRPC = 0,
+    RR_LOG_SINK_KIND_FILE = 1,
+};
+
+/// Used to tag the kind of `rr_log_sink`.
+typedef uint8_t rr_log_sink_kind;
+
+/// A sink for log messages.
+///
+/// See specific log sink types for more information:
+/// * `rr_grpc_sink`
+/// * `rr_file_sink`
+typedef struct rr_log_sink {
+    rr_log_sink_kind kind;
+
+    union {
+        rr_grpc_sink grpc;
+        rr_file_sink file;
+    };
+} rr_log_sink;
 
 /// Error codes returned by the Rerun C SDK as part of `rr_error`.
 ///
@@ -363,11 +424,11 @@ typedef struct rr_error {
 extern const char* rr_version_string(void);
 
 /// Spawns a new Rerun Viewer process from an executable available in PATH, ready to
-/// listen for incoming TCP connections.
+/// listen for incoming gRPC connections.
 ///
 /// `spawn_opts` can be set to NULL to use the recommended defaults.
 ///
-/// If a Rerun Viewer is already listening on this TCP port, this does nothing.
+/// If a Rerun Viewer is already listening on this gRPC port, this does nothing.
 extern void rr_spawn(const rr_spawn_options* spawn_opts, rr_error* error);
 
 /// Registers a new component type to be used in `rr_component_batch`.
@@ -413,25 +474,24 @@ extern void rr_recording_stream_set_thread_local(
 /// Check whether the recording stream is enabled.
 extern bool rr_recording_stream_is_enabled(rr_recording_stream stream, rr_error* error);
 
-/// Connect to a remote Rerun Viewer on the given ip:port.
+/// Stream data to multiple different sinks.
 ///
-/// Requires that you first start a Rerun Viewer by typing 'rerun' in a terminal.
+/// Any previously active sinks will be dropped.
 ///
-/// flush_timeout_sec:
-/// The minimum time the SDK will wait during a flush before potentially
-/// dropping data if progress is not being made. Passing a negative value indicates no timeout,
-/// and can cause a call to `flush` to block indefinitely.
-///
-/// This function returns immediately and will only raise an error for argument parsing errors,
-/// not for connection errors as these happen asynchronously.
-RR_DEPRECATED("use rr_recording_stream_connect_grpc instead")
-extern void rr_recording_stream_connect(
-    rr_recording_stream stream, rr_string tcp_addr, float flush_timeout_sec, rr_error* error
+/// See `rr_log_sink` for more information about what each sink does.
+extern void rr_recording_stream_set_sinks(
+    rr_recording_stream stream, rr_log_sink* sinks, uint32_t num_sinks, rr_error* error
 );
 
-/// Connect to a remote Rerun Viewer on the given HTTP(S) URL.
+/// Connect to a remote Rerun Viewer on the given URL.
 ///
 /// Requires that you first start a Rerun Viewer by typing 'rerun' in a terminal.
+///
+/// url:
+/// The scheme must be one of `rerun://`, `rerun+http://`, or `rerun+https://`,
+/// and the pathname must be `/proxy`.
+///
+/// The default is `rerun+http://127.0.0.1:9876/proxy`.
 ///
 /// flush_timeout_sec:
 /// The minimum time the SDK will wait during a flush before potentially
@@ -444,8 +504,21 @@ extern void rr_recording_stream_connect_grpc(
     rr_recording_stream stream, rr_string url, float flush_timeout_sec, rr_error* error
 );
 
+/// Swaps the underlying sink for a gRPC server sink pre-configured to listen on `rerun+http://{bind_ip}:{port}/proxy`.
+///
+/// The gRPC server will buffer all log data in memory so that late connecting viewers will get all the data.
+/// You can limit the amount of data buffered by the gRPC server with the `server_memory_limit` argument.
+/// Once reached, the earliest logged data will be dropped. Static data is never dropped.
+///
+/// It is highly recommended that you set the memory limit to `0B` if both the server and client are running
+/// on the same machine, otherwise you're potentially doubling your memory usage!
+extern void rr_recording_stream_serve_grpc(
+    rr_recording_stream stream, rr_string bind_ip, uint16_t port, rr_string server_memory_limit,
+    rr_error* error
+);
+
 /// Spawns a new Rerun Viewer process from an executable available in PATH, then connects to it
-/// over TCP.
+/// over gRPC.
 ///
 /// This function returns immediately and will only raise an error for argument parsing errors,
 /// not for connection errors as these happen asynchronously.
@@ -487,37 +560,16 @@ extern void rr_recording_stream_stdout(rr_recording_stream stream, rr_error* err
 /// No-op for destroyed/non-existing streams.
 extern void rr_recording_stream_flush_blocking(rr_recording_stream stream);
 
-/// Set the current time of the recording, for the current calling thread.
+/// Set the current index value of the recording, for a specific timeline, for the current calling thread.
 ///
 /// Used for all subsequent logging performed from this same thread, until the next call
 /// to one of the time setting methods.
 ///
 /// For example:
-/// `rr_recording_stream_set_time_sequence(stream, "frame_nr", &frame_nr, &err)`.
-extern void rr_recording_stream_set_time_sequence(
-    rr_recording_stream stream, rr_string timeline_name, int64_t sequence, rr_error* error
-);
-
-/// Set the current time of the recording, for the current calling thread.
-///
-/// Used for all subsequent logging performed from this same thread, until the next call
-/// to one of the time setting methods.
-///
-/// For example:
-/// `rr_recording_stream_set_time_seconds(stream, "sim_time", sim_time_secs, &err)`.
-extern void rr_recording_stream_set_time_seconds(
-    rr_recording_stream stream, rr_string timeline_name, double seconds, rr_error* error
-);
-
-/// Set the current time of the recording, for the current calling thread.
-///
-/// Used for all subsequent logging performed from this same thread, until the next call
-/// to one of the time setting methods.
-///
-/// For example:
-/// `rr_recording_stream_set_time_nanos(stream, "sim_time", sim_time_nanos, &err)`.
-extern void rr_recording_stream_set_time_nanos(
-    rr_recording_stream stream, rr_string timeline_name, int64_t ns, rr_error* error
+/// `rr_recording_stream_set_time_sequence(stream, "frame_nr", RR_TIME_TYPE_SEQUENCE, frame_nr, &err)`.
+extern void rr_recording_stream_set_time(
+    rr_recording_stream stream, rr_string timeline_name, rr_time_type time_type, int64_t value,
+    rr_error* error
 );
 
 /// Stops logging to the specified timeline for subsequent log calls.
@@ -585,17 +637,19 @@ extern void rr_recording_stream_log_file_from_contents(
 /// Note that this API ignores any stateful time set on the log stream via the
 /// `rr_recording_stream_set_time_sequence`/`rr_recording_stream_set_time_nanos`/etc. APIs.
 /// Furthermore, this will _not_ inject the default timelines `log_tick` and `log_time` timeline columns.
+///
+/// The contents of `time_columns` and `component_columns` AFTER this call is undefined.
 extern void rr_recording_stream_send_columns(
-    rr_recording_stream stream, rr_string entity_path,                            //
-    const rr_time_column* time_columns, uint32_t num_time_columns,                //
-    const rr_component_column* component_columns, uint32_t num_component_columns, //
+    rr_recording_stream stream, rr_string entity_path,                      //
+    rr_time_column* time_columns, uint32_t num_time_columns,                //
+    rr_component_column* component_columns, uint32_t num_component_columns, //
     rr_error* error
 );
 
 // ----------------------------------------------------------------------------
 // Other utilities
 
-/// Allocation method for `rr_video_asset_read_frame_timestamps_ns`.
+/// Allocation method for `rr_video_asset_read_frame_timestamps_nanos`.
 typedef int64_t* (*rr_alloc_timestamps)(void* alloc_context, uint32_t num_timestamps);
 
 /// Determines the presentation timestamps of all frames inside the video.
@@ -607,7 +661,7 @@ typedef int64_t* (*rr_alloc_timestamps)(void* alloc_context, uint32_t num_timest
 /// \param alloc_func
 /// Function used to allocate memory for the returned timestamps.
 /// Guaranteed to be called exactly once with the `alloc_context` pointer as argument.
-extern int64_t* rr_video_asset_read_frame_timestamps_ns(
+extern int64_t* rr_video_asset_read_frame_timestamps_nanos(
     const uint8_t* video_bytes, uint64_t video_bytes_len, rr_string media_type, void* alloc_context,
     rr_alloc_timestamps alloc_timestamps, rr_error* error
 );

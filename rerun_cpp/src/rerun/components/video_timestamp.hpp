@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include "../component_descriptor.hpp"
 #include "../datatypes/video_timestamp.hpp"
 #include "../result.hpp"
 
@@ -25,17 +24,37 @@ namespace rerun::components {
         }
 
         /// Creates a new `VideoTimestamp` from a presentation timestamp in seconds.
-        static VideoTimestamp from_seconds(double seconds) {
+        static VideoTimestamp from_secs(double seconds) {
+            return VideoTimestamp(std::chrono::duration<double>(seconds));
+        }
+
+        /// Creates a new `VideoTimestamp` from a presentation timestamp in seconds.
+        [[deprecated("Renamed to `from_secs`")]] static VideoTimestamp from_seconds(double seconds
+        ) {
             return VideoTimestamp(std::chrono::duration<double>(seconds));
         }
 
         /// Creates a new `VideoTimestamp` from a presentation timestamp in milliseconds.
-        static VideoTimestamp from_milliseconds(double milliseconds) {
+        static VideoTimestamp from_millis(double milliseconds) {
+            return VideoTimestamp(std::chrono::duration<double, std::milli>(milliseconds));
+        }
+
+        /// Creates a new `VideoTimestamp` from a presentation timestamp in milliseconds.
+        [[deprecated("Renamed to `from_millis`")]] static VideoTimestamp from_milliseconds(
+            double milliseconds
+        ) {
             return VideoTimestamp(std::chrono::duration<double, std::milli>(milliseconds));
         }
 
         /// Creates a new `VideoTimestamp` from a presentation timestamp in nanoseconds.
-        static VideoTimestamp from_nanoseconds(int64_t nanoseconds) {
+        static VideoTimestamp from_nanos(int64_t nanoseconds) {
+            return VideoTimestamp(std::chrono::nanoseconds(nanoseconds));
+        }
+
+        /// Creates a new `VideoTimestamp` from a presentation timestamp in nanoseconds.
+        [[deprecated("Renamed to `from_nanos`")]] static VideoTimestamp from_nanoseconds(
+            int64_t nanoseconds
+        ) {
             return VideoTimestamp(std::chrono::nanoseconds(nanoseconds));
         }
 
@@ -71,7 +90,7 @@ namespace rerun {
     /// \private
     template <>
     struct Loggable<components::VideoTimestamp> {
-        static constexpr ComponentDescriptor Descriptor = "rerun.components.VideoTimestamp";
+        static constexpr std::string_view ComponentType = "rerun.components.VideoTimestamp";
 
         /// Returns the arrow data type this type corresponds to.
         static const std::shared_ptr<arrow::DataType>& arrow_datatype() {

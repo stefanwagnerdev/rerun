@@ -1,8 +1,8 @@
 use crate::AppEnvironment;
 
 use re_analytics::{
-    event::{Id, Identify, OpenRecording, StoreInfo, ViewerRuntimeInformation, ViewerStarted},
     Config, Property,
+    event::{Id, Identify, OpenRecording, StoreInfo, ViewerRuntimeInformation, ViewerStarted},
 };
 
 pub fn identify(
@@ -56,25 +56,25 @@ pub fn open_recording(
         let re_log_types::StoreInfo {
             application_id,
             store_id,
-            is_official_example,
             store_source,
             store_version,
-
             cloned_from: _,
-            started: _,
         } = store_info;
 
-        let application_id_preprocessed = if *is_official_example {
-            Id::Official(application_id.0.clone())
-        } else {
-            Id::Hashed(Property::from(application_id.0.clone()).hashed())
-        };
+        let app_id_starts_with_rerun_example = application_id.as_str().starts_with("rerun_example");
 
-        let recording_id_preprocessed = if *is_official_example {
-            Id::Official(store_id.to_string())
-        } else {
-            Id::Hashed(Property::from(store_id.to_string()).hashed())
-        };
+        let (application_id_preprocessed, recording_id_preprocessed) =
+            if app_id_starts_with_rerun_example {
+                (
+                    Id::Official(application_id.0.clone()),
+                    Id::Official(store_id.to_string()),
+                )
+            } else {
+                (
+                    Id::Hashed(Property::from(application_id.0.clone()).hashed()),
+                    Id::Hashed(Property::from(store_id.to_string()).hashed()),
+                )
+            };
 
         use re_log_types::StoreSource as S;
         let store_source_preprocessed = match &store_source {
@@ -123,8 +123,6 @@ pub fn open_recording(
             S::CSdk | S::Unknown | S::Viewer | S::Other(_) => {}
         }
 
-        let app_id_starts_with_rerun_example = application_id.as_str().starts_with("rerun_example");
-
         StoreInfo {
             application_id: application_id_preprocessed,
             recording_id: recording_id_preprocessed,
@@ -133,7 +131,6 @@ pub fn open_recording(
             rust_version: rust_version_preprocessed,
             llvm_version: llvm_version_preprocessed,
             python_version: python_version_preprocessed,
-            is_official_example: app_id_starts_with_rerun_example,
             app_id_starts_with_rerun_example,
         }
     });
@@ -141,8 +138,6 @@ pub fn open_recording(
     let data_source = entity_db.data_source.as_ref().map(|v| match v {
         re_smart_channel::SmartChannelSource::File(_) => Some("file"), // .rrd, .png, .glb, …
         re_smart_channel::SmartChannelSource::RrdHttpStream { .. } => Some("http"),
-        // TODO(grtlr): Differentiate between `recording` and `catalog`
-        // re_smart_channel::SmartChannelSource::RedapGrpcStream { .. } => "recording | catalog",
         re_smart_channel::SmartChannelSource::RedapGrpcStream { .. } => None,
         re_smart_channel::SmartChannelSource::MessageProxy { .. } => Some("grpc"),
         // vvv spawn(), connect() vvv

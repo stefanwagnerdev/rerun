@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -27,11 +26,10 @@ class RotationAxisAngle(datatypes.RotationAxisAngle, ComponentMixin):
     # You can define your own __init__ function as a member of RotationAxisAngleExt in rotation_axis_angle_ext.py
 
     # Note: there are no fields here because RotationAxisAngle delegates to datatypes.RotationAxisAngle
-    pass
 
 
 class RotationAxisAngleBatch(datatypes.RotationAxisAngleBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.RotationAxisAngle")
+    _COMPONENT_TYPE: str = "rerun.components.RotationAxisAngle"
 
 
 # This is patched in late to avoid circular dependencies.

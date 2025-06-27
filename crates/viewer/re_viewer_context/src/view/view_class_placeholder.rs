@@ -1,5 +1,6 @@
+use re_chunk::EntityPath;
 use re_types::ViewClassIdentifier;
-use re_ui::{Help, UiExt};
+use re_ui::{Help, UiExt as _};
 
 use crate::{
     SystemExecutionOutput, ViewClass, ViewClassRegistryError, ViewQuery, ViewSpawnHeuristics,
@@ -23,7 +24,7 @@ impl ViewClass for ViewClassPlaceholder {
         &re_ui::icons::VIEW_UNKNOWN
     }
 
-    fn help(&self, _egui_ctx: &egui::Context) -> Help<'_> {
+    fn help(&self, _os: egui::os::OperatingSystem) -> Help {
         Help::new("Placeholder view").markdown("Placeholder view for unknown view class")
     }
 
@@ -42,7 +43,11 @@ impl ViewClass for ViewClassPlaceholder {
         crate::ViewClassLayoutPriority::Low
     }
 
-    fn spawn_heuristics(&self, _ctx: &ViewerContext<'_>) -> ViewSpawnHeuristics {
+    fn spawn_heuristics(
+        &self,
+        _ctx: &ViewerContext<'_>,
+        _include_entity: &dyn Fn(&EntityPath) -> bool,
+    ) -> ViewSpawnHeuristics {
         ViewSpawnHeuristics::empty()
     }
 
@@ -54,8 +59,9 @@ impl ViewClass for ViewClassPlaceholder {
         _query: &ViewQuery<'_>,
         _system_output: SystemExecutionOutput,
     ) -> Result<(), ViewSystemExecutionError> {
+        let tokens = ui.tokens();
         egui::Frame {
-            inner_margin: egui::Margin::same(re_ui::DesignTokens::view_padding()),
+            inner_margin: egui::Margin::same(tokens.view_padding()),
             ..Default::default()
         }
         .show(ui, |ui| {

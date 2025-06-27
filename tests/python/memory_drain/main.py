@@ -12,7 +12,8 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 import rerun as rr
 import rerun.blueprint as rrb
@@ -34,7 +35,7 @@ def job(name: str) -> Iterator[tuple[str, int, bytes]]:
         yield (name, i, mem.drain_as_bytes())
 
 
-def queue_results(generator: Iterator[Any], out_queue: queue.Queue) -> None:
+def queue_results(generator: Iterator[Any], out_queue: queue.Queue[Any]) -> None:
     for item in generator:
         out_queue.put(item)
 

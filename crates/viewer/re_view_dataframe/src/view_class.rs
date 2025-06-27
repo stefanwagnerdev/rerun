@@ -4,10 +4,10 @@ use re_chunk_store::{ColumnDescriptor, SparseFillStrategy};
 use re_dataframe::QueryEngine;
 use re_log_types::EntityPath;
 use re_types_core::ViewClassIdentifier;
-use re_ui::{Help, UiExt};
+use re_ui::{Help, UiExt as _};
 use re_viewer_context::{
-    Item, SystemExecutionOutput, ViewClass, ViewClassRegistryError, ViewId, ViewQuery, ViewState,
-    ViewStateExt, ViewSystemExecutionError, ViewerContext,
+    Item, SystemExecutionOutput, ViewClass, ViewClassRegistryError, ViewId, ViewQuery,
+    ViewSpawnHeuristics, ViewState, ViewStateExt as _, ViewSystemExecutionError, ViewerContext,
 };
 
 use crate::{
@@ -50,7 +50,7 @@ impl ViewClass for DataframeView {
         &re_ui::icons::VIEW_DATAFRAME
     }
 
-    fn help(&self, _egui_ctx: &egui::Context) -> Help<'_> {
+    fn help(&self, _os: egui::os::OperatingSystem) -> Help {
         Help::new("Dataframe view")
             .docs_link("https://rerun.io/docs/reference/types/views/dataframe_view")
             .markdown(
@@ -82,9 +82,13 @@ Configure in the selection panel:
         re_viewer_context::ViewClassLayoutPriority::Low
     }
 
-    fn spawn_heuristics(&self, _ctx: &ViewerContext<'_>) -> re_viewer_context::ViewSpawnHeuristics {
+    fn spawn_heuristics(
+        &self,
+        _ctx: &ViewerContext<'_>,
+        _include_entity: &dyn Fn(&EntityPath) -> bool,
+    ) -> ViewSpawnHeuristics {
         // Doesn't spawn anything by default.
-        Default::default()
+        ViewSpawnHeuristics::empty()
     }
 
     fn selection_ui(
@@ -150,6 +154,7 @@ Configure in the selection panel:
             include_semantically_empty_columns: false,
             include_indicator_columns: false,
             include_tombstone_columns: false,
+            include_static_columns: re_chunk_store::StaticColumnSelection::Both,
         };
 
         let view_columns = query_engine
@@ -177,9 +182,10 @@ Configure in the selection panel:
 
 fn timeline_not_found_ui(ctx: &ViewerContext<'_>, ui: &mut egui::Ui, view_id: ViewId) {
     let full_view_rect = ui.available_rect_before_wrap();
+    let tokens = ui.tokens();
 
     egui::Frame::new()
-        .inner_margin(re_ui::DesignTokens::view_padding())
+        .inner_margin(tokens.view_padding())
         .show(ui, |ui| {
             ui.warning_label("Unknown timeline");
 
@@ -204,3 +210,8 @@ fn timeline_not_found_ui(ctx: &ViewerContext<'_>, ui: &mut egui::Ui, view_id: Vi
 }
 
 re_viewer_context::impl_component_fallback_provider!(DataframeView => []);
+
+#[test]
+fn test_help_view() {
+    re_viewer_context::test_context::TestContext::test_help_view(|ctx| DataframeView.help(ctx));
+}

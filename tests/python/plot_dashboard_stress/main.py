@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import math
 import time
+from typing import Any, cast
 
 import numpy as np
 import rerun as rr  # pip install rerun-sdk
@@ -95,8 +96,8 @@ args = parser.parse_args()
 def main() -> None:
     rr.script_setup(args, "rerun_example_plot_dashboard_stress")
 
-    plot_paths = [f"plot_{i}" for i in range(0, args.num_plots)]
-    series_paths = [f"series_{i}" for i in range(0, args.num_series_per_plot)]
+    plot_paths = [f"plot_{i}" for i in range(args.num_plots)]
+    series_paths = [f"series_{i}" for i in range(args.num_series_per_plot)]
 
     if args.blueprint:
         print("logging blueprint!")
@@ -106,8 +107,8 @@ def main() -> None:
                     rrb.TimeSeriesView(
                         name=p,
                         origin=f"/{p}",
-                        time_ranges=rrb.VisibleTimeRange(
-                            "sim_time",
+                        time_ranges=rrb.VisibleTimeRanges(
+                            timeline="sim_time",
                             start=rrb.TimeRangeBoundary.cursor_relative(offset=rr.TimeInt(seconds=-2.5)),
                             end=rrb.TimeRangeBoundary.cursor_relative(offset=rr.TimeInt(seconds=2.5)),
                         ),
@@ -116,7 +117,7 @@ def main() -> None:
                 ]),
                 rrb.BlueprintPanel(state="collapsed"),
                 rrb.SelectionPanel(state="collapsed"),
-            )
+            ),
         )
 
     time_per_sim_step = 1.0 / args.freq
@@ -152,7 +153,7 @@ def main() -> None:
         values = np.random.normal(size=values_shape)
 
     if args.temporal_batch_size is None:
-        ticks = enumerate(sim_times)
+        ticks: Any = enumerate(sim_times)
     else:
         offsets = range(0, len(sim_times), args.temporal_batch_size)
         ticks = zip(
@@ -170,22 +171,22 @@ def main() -> None:
 
     for index, sim_time in ticks:
         if args.temporal_batch_size is None:
-            rr.set_time_seconds("sim_time", sim_time)
+            rr.set_time("sim_time", duration=sim_time)
         else:
-            time_column = rr.TimeSecondsColumn("sim_time", sim_time)
+            time_column = rr.TimeColumn("sim_time", duration=sim_time)
 
         # Log
         for plot_idx, plot_path in enumerate(plot_paths):
             for series_idx, series_path in enumerate(series_paths):
                 if args.temporal_batch_size is None:
                     value = values[index, plot_idx, series_idx]
-                    rr.log(f"{plot_path}/{series_path}", rr.Scalar(value))
+                    rr.log(f"{plot_path}/{series_path}", rr.Scalars(value))
                 else:
                     value_index = slice(index, index + args.temporal_batch_size)
                     rr.send_columns(
                         f"{plot_path}/{series_path}",
-                        indexes=[time_column],
-                        columns=rr.Scalar.columns(scalar=values[value_index, plot_idx, series_idx]),
+                        indexes=[cast(rr.TimeColumn, time_column)],
+                        columns=rr.Scalars.columns(scalars=values[value_index, plot_idx, series_idx]),
                     )
 
         # Measure how long this took and how high the load was.
@@ -221,7 +222,7 @@ def main() -> None:
             print(
                 f"logged {total_num_scalars} scalars over {round(total_elapsed, 3)}s \
 (freq={round(total_num_scalars / total_elapsed, 3)}Hz, expected={round(expected_total_freq, 3)}Hz, \
-load={round(max_load * 100.0, 3)}%)"
+load={round(max_load * 100.0, 3)}%)",
             )
 
             elapsed_debt = total_elapsed % 1  # just keep the fractional part
@@ -234,7 +235,7 @@ load={round(max_load * 100.0, 3)}%)"
         print(
             f"logged {total_num_scalars} scalars over {round(total_elapsed, 3)}s \
 (freq={round(total_num_scalars / total_elapsed, 3)}Hz, expected={round(expected_total_freq, 3)}Hz, \
-load={round(max_load * 100.0, 3)}%)"
+load={round(max_load * 100.0, 3)}%)",
         )
 
     rr.script_teardown(args)

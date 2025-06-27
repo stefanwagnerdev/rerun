@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -22,7 +21,7 @@ class GammaCorrection(datatypes.Float32, ComponentMixin):
     Used to adjust the gamma of a color or scalar value between 0 and 1 before rendering.
     `new_value = old_value ^ gamma`
 
-    Valid range is from 0 (excluding) to max float.
+    Must be a positive number.
     Defaults to 1.0 unless otherwise specified.
     """
 
@@ -30,11 +29,10 @@ class GammaCorrection(datatypes.Float32, ComponentMixin):
     # You can define your own __init__ function as a member of GammaCorrectionExt in gamma_correction_ext.py
 
     # Note: there are no fields here because GammaCorrection delegates to datatypes.Float32
-    pass
 
 
 class GammaCorrectionBatch(datatypes.Float32Batch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.GammaCorrection")
+    _COMPONENT_TYPE: str = "rerun.components.GammaCorrection"
 
 
 # This is patched in late to avoid circular dependencies.

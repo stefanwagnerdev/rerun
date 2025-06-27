@@ -11,6 +11,7 @@
 #include "as_components.hpp"
 #include "component_column.hpp"
 #include "error.hpp"
+#include "log_sink.hpp"
 #include "spawn_options.hpp"
 #include "time_column.hpp"
 
@@ -58,6 +59,12 @@ namespace rerun {
     /// The data will be timestamped automatically based on the `RecordingStream`'s
     /// internal clock.
     class RecordingStream {
+      private:
+        // TODO(grtlr): Ideally we'd expose more of the `EntityPath` struct to the C++ world so
+        //              that we don't have to hardcode this here.
+        static constexpr const char PROPERTIES_ENTITY_PATH[] = "__properties/";
+        static constexpr const char RECORDING_PROPERTIES_ENTITY_PATH[] = "__properties/recording/";
+
       public:
         /// Creates a new recording stream to log to.
         ///
@@ -133,62 +140,63 @@ namespace rerun {
         /// \details Either of these needs to be called, otherwise the stream will buffer up indefinitely.
         /// @{
 
-        /// Connect to a remote Rerun Viewer on the given ip:port.
+        /// Stream data to multiple sinks.
         ///
-        /// Requires that you first start a Rerun Viewer by typing 'rerun' in a terminal.
-        ///
-        /// flush_timeout_sec:
-        /// The minimum time the SDK will wait during a flush before potentially
-        /// dropping data if progress is not being made. Passing a negative value indicates no
-        /// timeout, and can cause a call to `flush` to block indefinitely.
-        ///
-        /// This function returns immediately.
-        [[deprecated("Use `connect_grpc` instead")]] Error connect(
-            std::string_view tcp_addr = "127.0.0.1:9876", float flush_timeout_sec = 2.0
-        ) const;
+        /// See specific sink types for more information:
+        /// * `FileSink`
+        /// * `GrpcSink`
+        template <typename... Ts>
+        Error set_sinks(const Ts&... sinks) const {
+            LogSink out_sinks[] = {sinks...};
+            uint32_t num_sinks = sizeof...(Ts);
+            return try_set_sinks(out_sinks, num_sinks);
+        }
 
-        /// Connect to a remote Rerun Viewer on the given ip:port.
+        /// Connect to a remote Rerun Viewer on the given URL.
         ///
         /// Requires that you first start a Rerun Viewer by typing 'rerun' in a terminal.
         ///
-        /// flush_timeout_sec:
-        /// The minimum time the SDK will wait during a flush before potentially
-        /// dropping data if progress is not being made. Passing a negative value indicates no
-        /// timeout, and can cause a call to `flush` to block indefinitely.
+        /// \param url The scheme must be one of `rerun://`, `rerun+http://`, or `rerun+https://`,
+        /// and the pathname must be `/proxy`. The default is `rerun+http://127.0.0.1:9876/proxy`.
         ///
-        /// This function returns immediately.
-        [[deprecated("Use `connect_grpc` instead")]] Error connect_tcp(
-            std::string_view tcp_addr = "127.0.0.1:9876", float flush_timeout_sec = 2.0
-        ) const;
-
-        /// Connect to a remote Rerun Viewer on the given HTTP(S) URL.
-        ///
-        /// Requires that you first start a Rerun Viewer by typing 'rerun' in a terminal.
-        ///
-        /// flush_timeout_sec:
-        /// The minimum time the SDK will wait during a flush before potentially
+        /// \param flush_timeout_sec The minimum time the SDK will wait during a flush before potentially
         /// dropping data if progress is not being made. Passing a negative value indicates no
         /// timeout, and can cause a call to `flush` to block indefinitely.
         ///
         /// This function returns immediately.
         Error connect_grpc(
-            std::string_view url = "http://127.0.0.1:9876", float flush_timeout_sec = 2.0
+            std::string_view url = "rerun+http://127.0.0.1:9876/proxy",
+            float flush_timeout_sec = 2.0
+        ) const;
+
+        /// Swaps the underlying sink for a gRPC server sink pre-configured to listen on `rerun+http://{bind_ip}:{port}/proxy`.
+        ///
+        /// The gRPC server will buffer all log data in memory so that late connecting viewers will get all the data.
+        /// You can limit the amount of data buffered by the gRPC server with the `server_memory_limit` argument.
+        /// Once reached, the earliest logged data will be dropped. Static data is never dropped.
+        ///
+        /// It is highly recommended that you set the memory limit to `0B` if both the server and client are running
+        /// on the same machine, otherwise you're potentially doubling your memory usage!
+        ///
+        /// Returns the URI of the gRPC server so you can connect to it from a viewer.
+        ///
+        /// This function returns immediately.
+        Result<std::string> serve_grpc(
+            std::string_view bind_ip = "0.0.0.0", uint16_t port = 9876,
+            std::string_view server_memory_limit = "25%"
         ) const;
 
         /// Spawns a new Rerun Viewer process from an executable available in PATH, then connects to it
         /// over gRPC.
         ///
-        /// flush_timeout_sec:
-        /// The minimum time the SDK will wait during a flush before potentially
-        /// dropping data if progress is not being made. Passing a negative value indicates no
-        /// timeout, and can cause a call to `flush` to block indefinitely.
-        ///
         /// If a Rerun Viewer is already listening on this port, the stream will be redirected to
         /// that viewer instead of starting a new one.
         ///
-        /// ## Parameters
-        /// options:
-        /// See `rerun::SpawnOptions` for more information.
+        /// \param flush_timeout_sec The minimum time the SDK will wait during a flush before potentially
+        /// dropping data if progress is not being made. Passing a negative value indicates no
+        /// timeout, and can cause a call to `flush` to block indefinitely.
+        ///
+        /// \param options See `rerun::SpawnOptions` for more information.
         Error spawn(const SpawnOptions& options = {}, float flush_timeout_sec = 2.0) const;
 
         /// @see RecordingStream::spawn
@@ -232,11 +240,11 @@ namespace rerun {
         /// @}
 
         // -----------------------------------------------------------------------------------------
-        /// \name Controlling log time.
+        /// \name Controlling log time (index).
         /// \details
         /// @{
 
-        /// Set the current time of the recording, for the current calling thread.
+        /// Set the index value of the given timeline as a sequence number, for the current calling thread.
         ///
         /// Used for all subsequent logging performed from this same thread, until the next call
         /// to one of the time setting methods.
@@ -244,8 +252,98 @@ namespace rerun {
         /// For example: `rec.set_time_sequence("frame_nr", frame_nr)`.
         ///
         /// You can remove a timeline from subsequent log calls again using `rec.disable_timeline`.
-        /// @see set_time_seconds, set_time_nanos, reset_time, set_time, disable_timeline
+        /// @see set_time_sequence, set_time_duration, set_time_duration_secs, set_time_duration_nanos, set_time_timestamp, set_time_timestamp_secs_since_epoch, set_time_timestamp_nanos_since_epoch
         void set_time_sequence(std::string_view timeline_name, int64_t sequence_nr) const;
+
+        /// Set the index value of the given timeline as a duration, for the current calling thread.
+        ///
+        /// Used for all subsequent logging performed from this same thread, until the next call
+        /// to one of the time setting methods.
+        ///
+        /// For example: `rec.set_time_duration("runtime", time_since_start)`.
+        ///
+        /// You can remove a timeline from subsequent log calls again using `rec.disable_timeline`.
+        /// @see set_time_sequence, set_time_duration, set_time_duration_secs, set_time_duration_nanos, set_time_timestamp, set_time_timestamp_secs_since_epoch, set_time_timestamp_nanos_since_epoch
+        template <typename TRep, typename TPeriod>
+        void set_time_duration(
+            std::string_view timeline_name, std::chrono::duration<TRep, TPeriod> duration
+        ) const {
+            auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
+            set_time_duration_nanos(timeline_name, nanos);
+        }
+
+        /// Set the index value of the given timeline as a duration in seconds, for the current calling thread.
+        ///
+        /// Used for all subsequent logging performed from this same thread, until the next call
+        /// to one of the time setting methods.
+        ///
+        /// For example: `rec.set_time_duration_secs("runtime", seconds_since_start)`.
+        ///
+        /// You can remove a timeline from subsequent log calls again using `rec.disable_timeline`.
+        /// @see set_time_sequence, set_time_duration, set_time_duration_secs, set_time_duration_nanos, set_time_timestamp, set_time_timestamp_secs_since_epoch, set_time_timestamp_nanos_since_epoch
+        void set_time_duration_secs(std::string_view timeline_name, double secs) const {
+            set_time_duration_nanos(timeline_name, static_cast<int64_t>(1e9 * secs + 0.5));
+        }
+
+        /// Set the index value of the given timeline as a duration in nanoseconds, for the current calling thread.
+        ///
+        /// Used for all subsequent logging performed from this same thread, until the next call
+        /// to one of the time setting methods.
+        ///
+        /// For example: `rec.set_time_duration_nanos("runtime", nanos_since_start)`.
+        ///
+        /// You can remove a timeline from subsequent log calls again using `rec.disable_timeline`.
+        /// @see set_time_sequence, set_time_duration, set_time_duration_secs, set_time_duration_nanos, set_time_timestamp, set_time_timestamp_secs_since_epoch, set_time_timestamp_nanos_since_epoch
+        void set_time_duration_nanos(std::string_view timeline_name, int64_t nanos) const;
+
+        /// Set the index value of the given timeline as a timestamp, for the current calling thread.
+        ///
+        /// Used for all subsequent logging performed from this same thread, until the next call
+        /// to one of the time setting methods.
+        ///
+        /// For example: `rec.set_time_timestamp("capture_time", now())`.
+        ///
+        /// You can remove a timeline from subsequent log calls again using `rec.disable_timeline`.
+        /// @see set_time_sequence, set_time_duration, set_time_duration_secs, set_time_duration_nanos, set_time_timestamp, set_time_timestamp_secs_since_epoch, set_time_timestamp_nanos_since_epoch
+        template <typename TClock>
+        void set_time_timestamp(
+            std::string_view timeline_name, std::chrono::time_point<TClock> timestamp
+        ) const {
+            set_time_timestamp_nanos_since_epoch(
+                timeline_name,
+                std::chrono::duration_cast<std::chrono::nanoseconds>(timestamp.time_since_epoch())
+                    .count()
+            );
+        }
+
+        /// Set the index value of the given timeline as seconds since Unix Epoch (1970), for the current calling thread.
+        ///
+        /// Used for all subsequent logging performed from this same thread, until the next call
+        /// to one of the time setting methods.
+        ///
+        /// For example: `rec.set_time_timestamp_secs_since_epoch("capture_time", secs_since_epoch())`.
+        ///
+        /// You can remove a timeline from subsequent log calls again using `rec.disable_timeline`.
+        /// @see set_time_sequence, set_time_duration, set_time_duration_secs, set_time_duration_nanos, set_time_timestamp, set_time_timestamp_secs_since_epoch, set_time_timestamp_nanos_since_epoch
+        void set_time_timestamp_secs_since_epoch(std::string_view timeline_name, double seconds)
+            const {
+            set_time_timestamp_nanos_since_epoch(
+                timeline_name,
+                static_cast<int64_t>(1e9 * seconds)
+            );
+        }
+
+        /// Set the index value of the given timeline as nanoseconds since Unix Epoch (1970), for the current calling thread.
+        ///
+        /// Used for all subsequent logging performed from this same thread, until the next call
+        /// to one of the time setting methods.
+        ///
+        /// For example: `rec.set_time_timestamp_nanos_since_epoch("capture_time", nanos_since_epoch())`.
+        ///
+        /// You can remove a timeline from subsequent log calls again using `rec.disable_timeline`.
+        /// @see set_time_sequence, set_time_duration, set_time_duration_secs, set_time_duration_nanos, set_time_timestamp, set_time_timestamp_secs_since_epoch, set_time_timestamp_nanos_since_epoch
+        void set_time_timestamp_nanos_since_epoch(std::string_view timeline_name, int64_t nanos)
+            const;
 
         /// Set the current time of the recording, for the current calling thread.
         ///
@@ -257,7 +355,9 @@ namespace rerun {
         /// You can remove a timeline from subsequent log calls again using `rec.disable_timeline`.
         /// @see set_time_sequence, set_time_seconds, set_time_nanos, reset_time, disable_timeline
         template <typename TClock>
-        void set_time(std::string_view timeline_name, std::chrono::time_point<TClock> time) const {
+        [[deprecated("Renamed to `set_time_timestamp`")]] void set_time(
+            std::string_view timeline_name, std::chrono::time_point<TClock> time
+        ) const {
             set_time(timeline_name, time.time_since_epoch());
         }
 
@@ -271,21 +371,10 @@ namespace rerun {
         /// You can remove a timeline from subsequent log calls again using `rec.disable_timeline`.
         /// @see set_time_sequence, set_time_seconds, set_time_nanos, reset_time, disable_timeline
         template <typename TRep, typename TPeriod>
-        void set_time(std::string_view timeline_name, std::chrono::duration<TRep, TPeriod> time)
-            const {
-            if constexpr (std::is_floating_point<TRep>::value) {
-                using seconds_double =
-                    std::chrono::duration<double>; // Default ratio is 1:1 == seconds.
-                set_time_seconds(
-                    timeline_name,
-                    std::chrono::duration_cast<seconds_double>(time).count()
-                );
-            } else {
-                set_time_nanos(
-                    timeline_name,
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(time).count()
-                );
-            }
+        [[deprecated("Renamed `set_time_duration`")]] void set_time(
+            std::string_view timeline_name, std::chrono::duration<TRep, TPeriod> time
+        ) const {
+            set_time_duration(timeline_name, time);
         }
 
         /// Set the current time of the recording, for the current calling thread.
@@ -297,7 +386,11 @@ namespace rerun {
         ///
         /// You can remove a timeline from subsequent log calls again using `rec.disable_timeline`.
         /// @see set_time_sequence, set_time_nanos, reset_time, set_time, disable_timeline
-        void set_time_seconds(std::string_view timeline_name, double seconds) const;
+        [[deprecated("Use either `set_time_duration_secs` or `set_time_timestamp_secs_since_epoch`"
+        )]] void
+            set_time_seconds(std::string_view timeline_name, double seconds) const {
+            set_time_duration_secs(timeline_name, seconds);
+        }
 
         /// Set the current time of the recording, for the current calling thread.
         ///
@@ -308,7 +401,12 @@ namespace rerun {
         ///
         /// You can remove a timeline from subsequent log calls again using `rec.disable_timeline`.
         /// @see set_time_sequence, set_time_seconds, reset_time, set_time, disable_timeline
-        void set_time_nanos(std::string_view timeline_name, int64_t nanos) const;
+        [[deprecated(
+            "Use either `set_time_duration_nanos` or `set_time_timestamp_nanos_since_epoch`"
+        )]] void
+            set_time_nanos(std::string_view timeline_name, int64_t nanos) const {
+            set_time_duration_nanos(timeline_name, nanos);
+        }
 
         /// Stops logging to the specified timeline for subsequent log calls.
         ///
@@ -340,9 +438,9 @@ namespace rerun {
         /// that implements the `AsComponents<T>` trait.
         ///
         /// When logging data, you must always provide an [entity_path](https://www.rerun.io/docs/concepts/entity-path)
-        /// for identifying the data. Note that the path prefix "rerun/" is considered reserved for use by the Rerun SDK
+        /// for identifying the data. Note that paths prefixed with "__" are considered reserved for use by the Rerun SDK
         /// itself and should not be used for logging user data. This is where Rerun will log additional information
-        /// such as warnings.
+        /// such as properties and warnings.
         ///
         /// The most common way to log is with one of the rerun archetypes, all of which implement the `AsComponents` trait.
         ///
@@ -785,9 +883,70 @@ namespace rerun {
             Collection<ComponentColumn> component_columns
         ) const;
 
+        /// Set a property of a recording.
+        ///
+        /// Any failures that may occur during serialization are handled with `Error::handle`.
+        ///
+        /// \param name The name of the property.
+        /// \param values The values of the property.
+        /// \see `try_send_property`
+        template <typename... Ts>
+        void send_property(std::string_view name, const Ts&... values) const {
+            try_send_property(name, values...).handle();
+        }
+
+        /// Set a property of a recording.
+        ///
+        /// Any failures that may occur during serialization are handled with `Error::handle`.
+        ///
+        /// \param name The name of the property.
+        /// \param values The values of the property.
+        /// \see `set_property`
+        template <typename... Ts>
+        Error try_send_property(std::string_view name, const Ts&... values) const {
+            return try_log_static(
+                this->PROPERTIES_ENTITY_PATH + std::string(name),
+                values... // NOLINT
+            );
+        }
+
+        /// Set the name of a recording.
+        ///
+        /// Any failures that may occur during serialization are handled with `Error::handle`.
+        ///
+        /// \param name The name of the recording.
+        /// \see `try_send_recording_name`
+        void send_recording_name(std::string_view name) const {
+            try_send_recording_name(name).handle();
+        }
+
+        /// Set the name of a recording.
+        ///
+        /// \param name The name of the recording.
+        /// \see `send_recording_name`
+        Error try_send_recording_name(std::string_view name) const;
+
+        /// Set the start time of a recording.
+        ///
+        /// Any failures that may occur during serialization are handled with `Error::handle`.
+        ///
+        /// \param nanos The timestamp of the recording in nanoseconds since Unix epoch.
+        /// \see `try_send_recording_start_time`
+        void send_recording_start_time_nanos(int64_t nanos) const {
+            try_send_recording_start_time_nanos(nanos).handle();
+        }
+
+        /// Set the start time of a recording.
+        ///
+        /// \param nanos The timestamp of the recording in nanoseconds since Unix epoch.
+        /// \see `set_name`
+        Error try_send_recording_start_time_nanos(int64_t nanos) const;
+
         /// @}
 
       private:
+        Error try_set_sinks(const LogSink* sinks, uint32_t num_sinks) const;
+
         // Utility function to implement `try_send_columns` variadic template.
         static void push_back_columns(
             std::vector<ComponentColumn>& component_columns, Collection<ComponentColumn> new_columns

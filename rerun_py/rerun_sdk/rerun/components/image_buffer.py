@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -26,11 +25,10 @@ class ImageBuffer(datatypes.Blob, ComponentMixin):
     # You can define your own __init__ function as a member of ImageBufferExt in image_buffer_ext.py
 
     # Note: there are no fields here because ImageBuffer delegates to datatypes.Blob
-    pass
 
 
 class ImageBufferBatch(datatypes.BlobBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.ImageBuffer")
+    _COMPONENT_TYPE: str = "rerun.components.ImageBuffer"
 
 
 # This is patched in late to avoid circular dependencies.

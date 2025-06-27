@@ -1,4 +1,4 @@
-use std::sync::{atomic::Ordering::Relaxed, Arc};
+use std::sync::{Arc, atomic::Ordering::Relaxed};
 
 use web_time::Instant;
 
@@ -117,13 +117,13 @@ impl<T: Send> Sender<T> {
     }
 
     /// Latest known latency from sending a message to receiving it, it nanoseconds.
-    pub fn latency_ns(&self) -> u64 {
-        self.stats.latency_ns.load(Relaxed)
+    pub fn latency_nanos(&self) -> u64 {
+        self.stats.latency_nanos.load(Relaxed)
     }
 
     /// Latest known latency from sending a message to receiving it,
     /// in seconds
     pub fn latency_sec(&self) -> f32 {
-        self.latency_ns() as f32 / 1e9
+        self.latency_nanos() as f32 / 1e9
     }
 }

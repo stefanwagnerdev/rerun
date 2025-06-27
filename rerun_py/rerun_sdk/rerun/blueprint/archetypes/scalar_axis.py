@@ -21,9 +21,15 @@ __all__ = ["ScalarAxis"]
 
 @define(str=False, repr=False, init=False)
 class ScalarAxis(Archetype):
-    """**Archetype**: Configuration for the scalar axis of a plot."""
+    """
+    **Archetype**: Configuration for the scalar (Y) axis of a plot.
 
-    def __init__(self: Any, *, range: datatypes.Range1DLike | None = None, zoom_lock: datatypes.BoolLike | None = None):
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    """
+
+    def __init__(
+        self: Any, *, range: datatypes.Range1DLike | None = None, zoom_lock: datatypes.BoolLike | None = None
+    ) -> None:
         """
         Create a new instance of the ScalarAxis archetype.
 

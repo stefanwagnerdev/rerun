@@ -12,14 +12,17 @@
 
 // TODO(cmc): this should only run for release builds
 
+#![allow(clippy::disallowed_types)] // False positives for using files on Wasm
 #![allow(clippy::unwrap_used)]
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, ensure, Context as _};
+use anyhow::{Context as _, bail, ensure};
 use walkdir::{DirEntry, WalkDir};
 
-use re_build_tools::{get_and_track_env_var, rerun_if_changed, write_file_if_necessary};
+use re_build_tools::{
+    Environment, get_and_track_env_var, rerun_if_changed, write_file_if_necessary,
+};
 
 // ---
 
@@ -65,7 +68,7 @@ impl std::str::FromStr for ImportClause {
 
             return s
                 .parse()
-                .with_context(|| "couldn't parse {s:?} as PathBuf")
+                .with_context(|| format!("couldn't parse {s:?} as PathBuf"))
                 .map(|path| Self { path });
         }
 
@@ -101,11 +104,10 @@ fn check_hermeticity(root_path: impl AsRef<Path>, file_path: impl AsRef<Path>) {
 
 // ---
 
-fn should_run() -> bool {
+fn should_run(environment: Environment) -> bool {
     #![allow(clippy::match_same_arms)]
-    use re_build_tools::Environment;
 
-    match Environment::detect() {
+    match environment {
         // we should have been run before publishing
         Environment::PublishingCrates => false,
 
@@ -119,13 +121,24 @@ fn should_run() -> bool {
 }
 
 fn main() {
+    let environment = Environment::detect();
+    let is_release = cfg!(not(debug_assertions)); // This works
+
+    // DO NOT USE `cfg!` for this, that would give you the host's platform!
+    let targets_wasm = get_and_track_env_var("CARGO_CFG_TARGET_FAMILY").unwrap() == "wasm";
+
     cfg_aliases::cfg_aliases! {
         native: { not(target_arch = "wasm32") },
         web: { target_arch = "wasm32" },
-        load_shaders_from_disk: { all(native, debug_assertions) } // Shader reloading is only supported on native-debug currently.
     }
 
-    if !should_run() {
+    println!("cargo::rustc-check-cfg=cfg(load_shaders_from_disk)");
+    if environment == Environment::DeveloperInWorkspace && !is_release && !targets_wasm {
+        // Enable hot shader reloading:
+        println!("cargo:rustc-cfg=load_shaders_from_disk");
+    }
+
+    if !should_run(environment) {
         return;
     }
 
@@ -208,10 +221,6 @@ pub fn init() {
         // by the other!
         let virtpath = entry.path().strip_prefix(&manifest_path).unwrap();
         let virtpath = virtpath.to_str().unwrap().replace('\\', "/"); // Force slashes on Windows.
-
-        let is_release = cfg!(not(debug_assertions));
-        // DO NOT USE `cfg!` for this, that would give you the host's platform!
-        let targets_wasm = get_and_track_env_var("CARGO_CFG_TARGET_FAMILY").unwrap() == "wasm";
 
         // Make sure we're not referencing anything outside of the workspace!
         //

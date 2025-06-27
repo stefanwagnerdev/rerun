@@ -76,6 +76,9 @@ namespace rerun::archetypes {
     ///     );
     /// }
     /// ```
+    ///
+    /// ⚠ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    ///
     struct Pinhole {
         /// Camera projection, from image coordinates to view coordinates.
         std::optional<ComponentBatch> image_from_camera;
@@ -125,32 +128,32 @@ namespace rerun::archetypes {
         std::optional<ComponentBatch> image_plane_distance;
 
       public:
-        static constexpr const char IndicatorComponentName[] = "rerun.components.PinholeIndicator";
+        static constexpr const char IndicatorComponentType[] = "rerun.components.PinholeIndicator";
 
         /// Indicator component, used to identify the archetype when converting to a list of components.
-        using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentName>;
+        using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentType>;
         /// The name of the archetype as used in `ComponentDescriptor`s.
         static constexpr const char ArchetypeName[] = "rerun.archetypes.Pinhole";
 
         /// `ComponentDescriptor` for the `image_from_camera` field.
         static constexpr auto Descriptor_image_from_camera = ComponentDescriptor(
-            ArchetypeName, "image_from_camera",
-            Loggable<rerun::components::PinholeProjection>::Descriptor.component_name
+            ArchetypeName, "Pinhole:image_from_camera",
+            Loggable<rerun::components::PinholeProjection>::ComponentType
         );
         /// `ComponentDescriptor` for the `resolution` field.
         static constexpr auto Descriptor_resolution = ComponentDescriptor(
-            ArchetypeName, "resolution",
-            Loggable<rerun::components::Resolution>::Descriptor.component_name
+            ArchetypeName, "Pinhole:resolution",
+            Loggable<rerun::components::Resolution>::ComponentType
         );
         /// `ComponentDescriptor` for the `camera_xyz` field.
         static constexpr auto Descriptor_camera_xyz = ComponentDescriptor(
-            ArchetypeName, "camera_xyz",
-            Loggable<rerun::components::ViewCoordinates>::Descriptor.component_name
+            ArchetypeName, "Pinhole:camera_xyz",
+            Loggable<rerun::components::ViewCoordinates>::ComponentType
         );
         /// `ComponentDescriptor` for the `image_plane_distance` field.
         static constexpr auto Descriptor_image_plane_distance = ComponentDescriptor(
-            ArchetypeName, "image_plane_distance",
-            Loggable<rerun::components::ImagePlaneDistance>::Descriptor.component_name
+            ArchetypeName, "Pinhole:image_plane_distance",
+            Loggable<rerun::components::ImagePlaneDistance>::ComponentType
         );
 
       public: // START of extensions from pinhole_ext.cpp:

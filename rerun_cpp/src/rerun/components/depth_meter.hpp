@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include "../component_descriptor.hpp"
 #include "../datatypes/float32.hpp"
 #include "../result.hpp"
 
@@ -19,6 +18,9 @@ namespace rerun::components {
     ///
     /// Note that the only effect on 2D views is the physical depth values shown when hovering the image.
     /// In 3D views on the other hand, this affects where the points of the point cloud are placed.
+    ///
+    /// ⚠ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    ///
     struct DepthMeter {
         rerun::datatypes::Float32 value;
 
@@ -52,7 +54,7 @@ namespace rerun {
     /// \private
     template <>
     struct Loggable<components::DepthMeter> {
-        static constexpr ComponentDescriptor Descriptor = "rerun.components.DepthMeter";
+        static constexpr std::string_view ComponentType = "rerun.components.DepthMeter";
 
         /// Returns the arrow data type this type corresponds to.
         static const std::shared_ptr<arrow::DataType>& arrow_datatype() {

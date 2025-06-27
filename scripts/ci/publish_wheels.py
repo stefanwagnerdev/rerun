@@ -54,9 +54,15 @@ def publish_notebook_asset() -> None:
             with zipfile.ZipFile(whl, "r") as archive:
                 # Extract the specified file to the target directory
                 archive.extract("rerun_notebook/static/widget.js", "extracted")
-                bucket.blob(f"version/{wheel_version}/widget.js").upload_from_filename(
-                    "extracted/rerun_notebook/static/widget.js"
-                )
+                archive.extract("rerun_notebook/static/re_viewer_bg.wasm", "extracted")
+                blob_base = f"version/{wheel_version}"
+                file_base = "extracted/rerun_notebook/static"
+                blobs = [
+                    (bucket.blob(f"{blob_base}/widget.js"), f"{file_base}/widget.js"),
+                    (bucket.blob(f"{blob_base}/re_viewer_bg.wasm"), f"{file_base}/re_viewer_bg.wasm"),
+                ]
+                for blob, filename in blobs:
+                    blob.upload_from_filename(filename)
 
 
 def main() -> None:
@@ -68,7 +74,7 @@ def main() -> None:
     args = parser.parse_args()
 
     bucket = Gcs("rerun-open").bucket("rerun-builds")
-    wheel_blobs: list[Blob] = list(blob for blob in bucket.list_blobs(prefix=args.dir) if blob.name.endswith(".whl"))
+    wheel_blobs: list[Blob] = [blob for blob in bucket.list_blobs(prefix=args.dir) if blob.name.endswith(".whl")]
     wheels = [blob.name.split("/")[-1] for blob in wheel_blobs]
     wheel_paths = [f"wheels/{wheel}" for wheel in wheels]
     wheel_utils.check_expected_wheels(wheels)
@@ -78,7 +84,7 @@ def main() -> None:
     os.mkdir("wheels")
     with ThreadPoolExecutor() as e:
         for blob in wheel_blobs:
-            e.submit(lambda: blob.download_to_filename(f"wheels/{blob.name.split('/')[-1]}"))
+            e.submit(lambda blob: blob.download_to_filename(f"wheels/{blob.name.split('/')[-1]}"), blob)
 
     check_version(canonicalize_version(args.version))
 

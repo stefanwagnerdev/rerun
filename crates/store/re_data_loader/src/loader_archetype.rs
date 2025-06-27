@@ -1,11 +1,11 @@
 use itertools::Either;
 
 use re_chunk::{Chunk, RowId};
-use re_log_types::{EntityPath, TimeInt, TimePoint};
-use re_types::archetypes::{AssetVideo, VideoFrameReference};
-use re_types::components::VideoTimestamp;
+use re_log_types::{EntityPath, TimePoint};
 use re_types::Archetype;
 use re_types::ComponentBatch;
+use re_types::archetypes::{AssetVideo, VideoFrameReference};
+use re_types::components::VideoTimestamp;
 
 use crate::{DataLoader, DataLoaderError, LoadedData};
 
@@ -67,28 +67,28 @@ impl DataLoader for ArchetypeLoader {
         // TODO(cmc): log these once heuristics (I think?) are fixed
         if false {
             if let Ok(metadata) = filepath.metadata() {
-                use re_log_types::{Time, Timeline};
+                use re_log_types::TimeCell;
 
                 if let Some(created) = metadata
                     .created()
                     .ok()
-                    .and_then(|t| TimeInt::try_from(Time::try_from(t).ok()?).ok())
+                    .and_then(|t| TimeCell::try_from(t).ok())
                 {
-                    timepoint.insert(Timeline::new_temporal("created_at"), created);
+                    timepoint.insert_cell("created_at", created);
                 }
                 if let Some(modified) = metadata
                     .modified()
                     .ok()
-                    .and_then(|t| TimeInt::try_from(Time::try_from(t).ok()?).ok())
+                    .and_then(|t| TimeCell::try_from(t).ok())
                 {
-                    timepoint.insert(Timeline::new_temporal("modified_at"), modified);
+                    timepoint.insert_cell("modified_at", modified);
                 }
                 if let Some(accessed) = metadata
                     .accessed()
                     .ok()
-                    .and_then(|t| TimeInt::try_from(Time::try_from(t).ok()?).ok())
+                    .and_then(|t| TimeCell::try_from(t).ok())
                 {
-                    timepoint.insert(Timeline::new_temporal("accessed_at"), accessed);
+                    timepoint.insert_cell("accessed_at", accessed);
                 }
             }
         }
@@ -154,7 +154,7 @@ fn load_image(
     timepoint: TimePoint,
     entity_path: EntityPath,
     contents: Vec<u8>,
-) -> Result<impl ExactSizeIterator<Item = Chunk>, DataLoaderError> {
+) -> Result<impl ExactSizeIterator<Item = Chunk> + use<>, DataLoaderError> {
     re_tracing::profile_function!();
 
     let rows = [
@@ -180,27 +180,34 @@ fn load_video(
     mut timepoint: TimePoint,
     entity_path: &EntityPath,
     contents: Vec<u8>,
-) -> Result<impl ExactSizeIterator<Item = Chunk>, DataLoaderError> {
+) -> Result<impl ExactSizeIterator<Item = Chunk> + use<>, DataLoaderError> {
     re_tracing::profile_function!();
 
-    let video_timeline = re_log_types::Timeline::new_temporal("video");
-    timepoint.insert(video_timeline, re_log_types::TimeInt::new_temporal(0));
+    let video_timeline = re_log_types::Timeline::new_duration("video");
+    timepoint.insert_cell(
+        *video_timeline.name(),
+        re_log_types::TimeCell::ZERO_DURATION,
+    );
 
     let video_asset = AssetVideo::new(contents);
 
-    let video_frame_reference_chunk = match video_asset.read_frame_timestamps_ns() {
-        Ok(frame_timestamps_ns) => {
+    let video_frame_reference_chunk = match video_asset.read_frame_timestamps_nanos() {
+        Ok(frame_timestamps_nanos) => {
             // Time column.
             let is_sorted = Some(true);
-            let frame_timestamps_ns: arrow::buffer::ScalarBuffer<i64> = frame_timestamps_ns.into();
-            let time_column =
-                re_chunk::TimeColumn::new(is_sorted, video_timeline, frame_timestamps_ns.clone());
+            let frame_timestamps_nanos: arrow::buffer::ScalarBuffer<i64> =
+                frame_timestamps_nanos.into();
+            let time_column = re_chunk::TimeColumn::new(
+                is_sorted,
+                video_timeline,
+                frame_timestamps_nanos.clone(),
+            );
 
             // VideoTimestamp component column.
-            let video_timestamps = frame_timestamps_ns
+            let video_timestamps = frame_timestamps_nanos
                 .iter()
                 .copied()
-                .map(VideoTimestamp::from_nanoseconds)
+                .map(VideoTimestamp::from_nanos)
                 .collect::<Vec<_>>();
             let video_timestamp_batch = &video_timestamps as &dyn ComponentBatch;
             let video_timestamp_list_array = video_timestamp_batch
@@ -224,7 +231,7 @@ fn load_video(
                         video_frame_reference_indicators_list_array,
                     ),
                     (
-                        video_timestamp_batch.descriptor().into_owned(),
+                        VideoFrameReference::descriptor_timestamp(),
                         video_timestamp_list_array,
                     ),
                 ]
@@ -284,7 +291,7 @@ fn load_point_cloud(
     timepoint: TimePoint,
     entity_path: EntityPath,
     contents: &[u8],
-) -> Result<impl ExactSizeIterator<Item = Chunk>, DataLoaderError> {
+) -> Result<impl ExactSizeIterator<Item = Chunk> + use<>, DataLoaderError> {
     re_tracing::profile_function!();
 
     let rows = [

@@ -88,6 +88,7 @@ pub fn run_native_viewer_with_messages(
     app_env: crate::AppEnvironment,
     startup_options: crate::StartupOptions,
     log_messages: Vec<LogMsg>,
+    connection_registry: Option<re_grpc_client::ConnectionRegistryHandle>,
     async_runtime: AsyncRuntimeHandle,
 ) -> eframe::Result {
     let (tx, rx) = re_smart_channel::smart_channel(
@@ -108,9 +109,10 @@ pub fn run_native_viewer_with_messages(
                 &app_env,
                 startup_options,
                 cc,
+                connection_registry,
                 async_runtime,
             );
-            app.add_receiver(rx);
+            app.add_log_receiver(rx);
             Box::new(app)
         }),
         force_wgpu_backend.as_deref(),

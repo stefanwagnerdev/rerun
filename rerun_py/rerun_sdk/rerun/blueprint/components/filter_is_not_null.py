@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from ..._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 from ...blueprint import datatypes as blueprint_datatypes
@@ -16,17 +15,20 @@ __all__ = ["FilterIsNotNull", "FilterIsNotNullBatch"]
 
 
 class FilterIsNotNull(blueprint_datatypes.FilterIsNotNull, ComponentMixin):
-    """**Component**: Configuration for the filter is not null feature of the dataframe view."""
+    """
+    **Component**: Configuration for the filter is not null feature of the dataframe view.
+
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    """
 
     _BATCH_TYPE = None
     # You can define your own __init__ function as a member of FilterIsNotNullExt in filter_is_not_null_ext.py
 
     # Note: there are no fields here because FilterIsNotNull delegates to datatypes.FilterIsNotNull
-    pass
 
 
 class FilterIsNotNullBatch(blueprint_datatypes.FilterIsNotNullBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.blueprint.components.FilterIsNotNull")
+    _COMPONENT_TYPE: str = "rerun.blueprint.components.FilterIsNotNull"
 
 
 # This is patched in late to avoid circular dependencies.

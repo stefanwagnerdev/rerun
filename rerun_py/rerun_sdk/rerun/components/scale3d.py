@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 from .scale3d_ext import Scale3DExt
@@ -29,11 +28,10 @@ class Scale3D(Scale3DExt, datatypes.Vec3D, ComponentMixin):
     # __init__ can be found in scale3d_ext.py
 
     # Note: there are no fields here because Scale3D delegates to datatypes.Vec3D
-    pass
 
 
 class Scale3DBatch(datatypes.Vec3DBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.Scale3D")
+    _COMPONENT_TYPE: str = "rerun.components.Scale3D"
 
 
 # This is patched in late to avoid circular dependencies.

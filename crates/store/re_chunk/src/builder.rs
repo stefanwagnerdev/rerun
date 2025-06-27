@@ -1,11 +1,11 @@
 use arrow::{array::ArrayRef, datatypes::DataType as ArrowDatatype};
-use itertools::Itertools;
+use itertools::Itertools as _;
 use nohash_hasher::IntMap;
 
-use re_log_types::{EntityPath, TimeInt, TimePoint, TimeType, Timeline, TimelineName};
+use re_log_types::{EntityPath, NonMinI64, TimePoint, Timeline, TimelineName};
 use re_types_core::{AsComponents, ComponentBatch, ComponentDescriptor, SerializedComponentBatch};
 
-use crate::{chunk::ChunkComponents, Chunk, ChunkId, ChunkResult, RowId, TimeColumn};
+use crate::{Chunk, ChunkId, ChunkResult, RowId, TimeColumn, chunk::ChunkComponents};
 
 // ---
 
@@ -72,16 +72,16 @@ impl ChunkBuilder {
 
         self.row_ids.push(row_id);
 
-        for (timeline, time) in timepoint.into() {
+        for (timeline, cell) in timepoint.into() {
             self.timelines
-                .entry(*timeline.name())
-                .or_insert_with(|| TimeColumn::builder(timeline))
-                .with_row(timeline.typ(), time);
+                .entry(timeline)
+                .or_insert_with(|| TimeColumn::builder(Timeline::new(timeline, cell.typ())))
+                .with_row(cell.value);
         }
 
-        for (component_name, array) in components {
+        for (component_descr, array) in components {
             self.components
-                .entry(component_name)
+                .entry(component_descr)
                 .or_default()
                 .push(array);
         }
@@ -131,15 +131,16 @@ impl ChunkBuilder {
         self,
         row_id: RowId,
         timepoint: impl Into<TimePoint>,
-        component_batch: &dyn ComponentBatch,
+        component_batch: (ComponentDescriptor, &dyn ComponentBatch),
     ) -> Self {
         self.with_row(
             row_id,
             timepoint,
             component_batch
+                .1
                 .to_arrow()
                 .ok()
-                .map(|array| (component_batch.descriptor().into_owned(), array)),
+                .map(|array| (component_batch.0, array)),
         )
     }
 
@@ -149,17 +150,19 @@ impl ChunkBuilder {
         self,
         row_id: RowId,
         timepoint: impl Into<TimePoint>,
-        component_batches: impl IntoIterator<Item = &'a dyn ComponentBatch>,
+        component_batches: impl IntoIterator<Item = (ComponentDescriptor, &'a dyn ComponentBatch)>,
     ) -> Self {
         self.with_row(
             row_id,
             timepoint,
-            component_batches.into_iter().filter_map(|component_batch| {
-                component_batch
-                    .to_arrow()
-                    .ok()
-                    .map(|array| (component_batch.descriptor().into_owned(), array))
-            }),
+            component_batches
+                .into_iter()
+                .filter_map(|(component_descr, component_batch)| {
+                    component_batch
+                        .to_arrow()
+                        .ok()
+                        .map(|array| (component_descr, array))
+                }),
         )
     }
 
@@ -273,8 +276,7 @@ impl ChunkBuilder {
 
         let components = {
             re_tracing::profile_scope!("components");
-            let mut per_name = ChunkComponents::default();
-            for (component_desc, list_array) in
+            ChunkComponents(
                 components
                     .into_iter()
                     .filter_map(|(component_desc, arrays)| {
@@ -282,10 +284,8 @@ impl ChunkBuilder {
                         re_arrow_util::arrays_to_list_array_opt(&arrays)
                             .map(|list_array| (component_desc, list_array))
                     })
-            {
-                per_name.insert_descriptor(component_desc, list_array);
-            }
-            per_name
+                    .collect(),
+            )
         };
 
         Chunk::from_native_row_ids(id, entity_path, None, &row_ids, timelines, components)
@@ -329,8 +329,7 @@ impl ChunkBuilder {
                 .map(|(timeline, time_column)| (timeline, time_column.build()))
                 .collect(),
             {
-                let mut per_name = ChunkComponents::default();
-                for (component_desc, list_array) in
+                ChunkComponents(
                     components
                         .into_iter()
                         .filter_map(|(component_desc, arrays)| {
@@ -345,10 +344,8 @@ impl ChunkBuilder {
                                     .map(|list_array| (component_desc, list_array))
                             }
                         })
-                {
-                    per_name.insert_descriptor(component_desc, list_array);
-                }
-                per_name
+                        .collect(),
+                )
             },
         )
     }
@@ -387,20 +384,8 @@ impl TimeColumnBuilder {
 
     /// Add a row's worth of time data using the given timestamp.
     #[inline]
-    pub fn with_row(&mut self, typ: TimeType, time: TimeInt) -> &mut Self {
-        let Self { timeline, times } = self;
-
-        if timeline.typ() != typ {
-            re_log::warn_once!(
-                "Mixing {:?} and {:?} in the same time column '{}'",
-                typ,
-                timeline.typ(),
-                timeline.name()
-            );
-        }
-
-        times.push(time.as_i64());
-
+    pub fn with_row(&mut self, time: NonMinI64) -> &mut Self {
+        self.times.push(time.into());
         self
     }
 

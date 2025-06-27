@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import pyarrow as pa
 import rerun_bindings as bindings
-from typing_extensions import deprecated
 
 from ._baseclasses import AsComponents, ComponentDescriptor, DescribedComponentBatch
 from .error_utils import _send_warning_or_raise, catch_and_log_exceptions
@@ -25,35 +25,35 @@ class IndicatorComponentBatch:
 
     data: pa.Array
 
-    def __init__(self, archetype_name: str) -> None:
+    def __init__(self, archetype: str) -> None:
         """
-        Creates a new indicator component based on a given `archetype_name`.
+        Creates a new indicator component based on a given `archetype`.
 
         Parameters
         ----------
-        archetype_name:
+        archetype:
             The fully qualified name of the Archetype.
 
         """
         self.data = pa.nulls(1, type=pa.null())
-        assert not archetype_name.startswith("rerun.archetypes.rerun.archetypes."), (
-            f"Bad archetype name '{archetype_name}' in IndicatorComponentBatch"
+        assert not archetype.startswith("rerun.archetypes.rerun.archetypes."), (
+            f"Bad archetype name '{archetype}' in IndicatorComponentBatch"
         )
-        self._archetype_name = archetype_name
+        self._archetype = archetype
 
-    def component_name(self) -> str:
-        return self._archetype_name.replace("archetypes", "components") + "Indicator"
+    def component(self) -> str:
+        return self._archetype.replace("archetypes", "components") + "Indicator"
 
     def as_arrow_array(self) -> pa.Array:
         return self.data
 
     def component_descriptor(self) -> ComponentDescriptor:
-        return ComponentDescriptor(self.component_name())
+        return ComponentDescriptor(self.component())
 
 
 @catch_and_log_exceptions()
 def log(
-    entity_path: str | list[str],
+    entity_path: str | list[object],
     entity: AsComponents | Iterable[DescribedComponentBatch],
     *extra: AsComponents | Iterable[DescribedComponentBatch],
     static: bool = False,
@@ -68,9 +68,9 @@ def log(
     objects.
 
     When logging data, you must always provide an [entity_path](https://www.rerun.io/docs/concepts/entity-path)
-    for identifying the data. Note that the path prefix "rerun/" is considered reserved for use by the Rerun SDK
+    for identifying the data. Note that paths prefixed with "__" are considered reserved for use by the Rerun SDK
     itself and should not be used for logging user data. This is where Rerun will log additional information
-    such as warnings.
+    such as properties and warnings.
 
     The most common way to log is with one of the rerun archetypes, all of which implement
     the `AsComponents` interface.
@@ -107,7 +107,8 @@ def log(
         See <https://www.rerun.io/docs/concepts/entity-path> for more on entity paths.
 
     entity:
-        Anything that implements the [`rerun.AsComponents`][] interface, usually an archetype.
+        Anything that implements the [`rerun.AsComponents`][] interface, usually an archetype,
+        or an iterable of (described)component batches.
 
     *extra:
         An arbitrary number of additional component bundles implementing the [`rerun.AsComponents`][]
@@ -120,8 +121,7 @@ def log(
         any temporal data of the same type.
 
         Otherwise, the data will be timestamped automatically with `log_time` and `log_tick`.
-        Additional timelines set by [`rerun.set_time_sequence`][], [`rerun.set_time_seconds`][] or
-        [`rerun.set_time_nanos`][] will also be included.
+        Additional timelines set by [`rerun.set_time`][] will also be included.
 
     recording:
         Specifies the [`rerun.RecordingStream`][] to use.
@@ -148,8 +148,8 @@ def log(
         components = list(entity)
     else:
         raise TypeError(
-            f"Expected an object implementing rerun.AsComponents or an iterable of rerun.ComponentBatchLike, "
-            f"but got {type(entity)} instead."
+            f"Expected an object implementing rerun.AsComponents or an iterable of rerun.DescribedComponentBatch, "
+            f"but got {type(entity)} instead.",
         )
 
     for ext in extra:
@@ -159,8 +159,8 @@ def log(
             components.extend(ext)
         else:
             raise TypeError(
-                f"Expected an object implementing rerun.AsComponents or an iterable of rerun.ComponentBatchLike, "
-                f"but got {type(entity)} instead."
+                f"Expected an object implementing rerun.AsComponents or an iterable of rerun.DescribedComponentBatch, "
+                f"but got {type(entity)} instead.",
             )
 
     _log_components(
@@ -171,72 +171,8 @@ def log(
     )
 
 
-@deprecated(
-    """Use `log` with partial update APIs instead.
-  See: https://www.rerun.io/docs/reference/migration/migration-0-22 for more details."""
-)
-@catch_and_log_exceptions()
-def log_components(
-    entity_path: str | list[str],
-    components: Iterable[DescribedComponentBatch],
-    *,
-    static: bool = False,
-    recording: RecordingStream | None = None,
-    strict: bool | None = None,
-) -> None:
-    r"""
-    Log an entity from a collection of `ComponentBatchLike` objects.
-
-    See also: [`rerun.log`][].
-
-    Parameters
-    ----------
-    entity_path:
-        Path to the entity in the space hierarchy.
-
-        The entity path can either be a string
-        (with special characters escaped, split on unescaped slashes)
-        or a list of unescaped strings.
-        This means that logging to `"world/my\ image\!"` is the same as logging
-        to ["world", "my image!"].
-
-        See <https://www.rerun.io/docs/concepts/entity-path> for more on entity paths.
-
-    components:
-        A collection of `ComponentBatchLike` objects.
-
-    static:
-        If true, the components will be logged as static data.
-
-        Static data has no time associated with it, exists on all timelines, and unconditionally shadows
-        any temporal data of the same type.
-
-        Otherwise, the data will be timestamped automatically with `log_time` and `log_tick`.
-        Additional timelines set by [`rerun.set_time_sequence`][], [`rerun.set_time_seconds`][] or
-        [`rerun.set_time_nanos`][] will also be included.
-
-    recording:
-        Specifies the [`rerun.RecordingStream`][] to use. If left unspecified,
-        defaults to the current active data recording, if there is one. See
-        also: [`rerun.init`][], [`rerun.set_global_data_recording`][].
-
-    strict:
-        If True, raise exceptions on non-loggable data.
-        If False, warn on non-loggable data.
-        if None, use the global default from `rerun.strict_mode()`
-
-    """
-
-    _log_components(
-        entity_path=entity_path,
-        components=list(components),
-        static=static,
-        recording=recording,  # NOLINT
-    )
-
-
 def _log_components(
-    entity_path: str | list[str],
+    entity_path: str | list[object],
     components: list[DescribedComponentBatch],
     *,
     static: bool = False,
@@ -270,8 +206,7 @@ def _log_components(
         any temporal data of the same type.
 
         Otherwise, the data will be timestamped automatically with `log_time` and `log_tick`.
-        Additional timelines set by [`rerun.set_time_sequence`][], [`rerun.set_time_seconds`][] or
-        [`rerun.set_time_nanos`][] will also be included.
+        Additional timelines set by [`rerun.set_time`][] will also be included.
 
     recording:
         Specifies the [`rerun.RecordingStream`][] to use. If left unspecified,
@@ -351,8 +286,7 @@ def log_file_from_path(
         any temporal data of the same type.
 
         Otherwise, the data will be timestamped automatically with `log_time` and `log_tick`.
-        Additional timelines set by [`rerun.set_time_sequence`][], [`rerun.set_time_seconds`][] or
-        [`rerun.set_time_nanos`][] will also be included.
+        Additional timelines set by [`rerun.set_time`][] will also be included.
 
     recording:
         Specifies the [`rerun.RecordingStream`][] to use. If left unspecified,
@@ -406,8 +340,7 @@ def log_file_from_contents(
         any temporal data of the same type.
 
         Otherwise, the data will be timestamped automatically with `log_time` and `log_tick`.
-        Additional timelines set by [`rerun.set_time_sequence`][], [`rerun.set_time_seconds`][] or
-        [`rerun.set_time_nanos`][] will also be included.
+        Additional timelines set by [`rerun.set_time`][] will also be included.
 
     recording:
         Specifies the [`rerun.RecordingStream`][] to use. If left unspecified,

@@ -20,7 +20,7 @@ from .force_strength import ForceStrength, ForceStrengthBatch
 from .grid_columns import GridColumns, GridColumnsBatch
 from .grid_spacing import GridSpacing, GridSpacingBatch
 from .included_content import IncludedContent, IncludedContentBatch
-from .interactive import Interactive, InteractiveBatch
+from .link_axis import LinkAxis, LinkAxisArrayLike, LinkAxisBatch, LinkAxisLike
 from .lock_range_during_zoom import LockRangeDuringZoom, LockRangeDuringZoomBatch
 from .map_provider import MapProvider, MapProviderArrayLike, MapProviderBatch, MapProviderLike
 from .near_clip_plane import NearClipPlane, NearClipPlaneBatch
@@ -38,7 +38,7 @@ from .view_origin import ViewOrigin, ViewOriginBatch
 from .viewer_recommendation_hash import ViewerRecommendationHash, ViewerRecommendationHashBatch
 from .visible_time_range import VisibleTimeRange, VisibleTimeRangeBatch
 from .visual_bounds2d import VisualBounds2D, VisualBounds2DBatch
-from .visualizer_overrides import VisualizerOverrides, VisualizerOverridesBatch
+from .visualizer_override import VisualizerOverride, VisualizerOverrideBatch
 from .zoom_level import ZoomLevel, ZoomLevelBatch
 
 __all__ = [
@@ -84,8 +84,10 @@ __all__ = [
     "GridSpacingBatch",
     "IncludedContent",
     "IncludedContentBatch",
-    "Interactive",
-    "InteractiveBatch",
+    "LinkAxis",
+    "LinkAxisArrayLike",
+    "LinkAxisBatch",
+    "LinkAxisLike",
     "LockRangeDuringZoom",
     "LockRangeDuringZoomBatch",
     "MapProvider",
@@ -126,8 +128,8 @@ __all__ = [
     "VisibleTimeRangeBatch",
     "VisualBounds2D",
     "VisualBounds2DBatch",
-    "VisualizerOverrides",
-    "VisualizerOverridesBatch",
+    "VisualizerOverride",
+    "VisualizerOverrideBatch",
     "ZoomLevel",
     "ZoomLevelBatch",
 ]

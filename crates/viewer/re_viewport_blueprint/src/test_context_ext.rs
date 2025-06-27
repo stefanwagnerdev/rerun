@@ -1,10 +1,8 @@
 use ahash::HashMap;
 
-use re_viewer_context::{
-    test_context::TestContext, Contents, ViewClassExt, ViewerContext, VisitorControlFlow,
-};
+use re_viewer_context::{Contents, ViewerContext, VisitorControlFlow, test_context::TestContext};
 
-use crate::ViewportBlueprint;
+use crate::{ViewportBlueprint, view_contents::DataQueryPropertyResolver};
 
 /// Extension trait to [`TestContext`] for blueprint-related features.
 pub trait TestContextExt {
@@ -61,11 +59,6 @@ impl TestContextExt for TestContext {
                 let viewport_blueprint =
                     ViewportBlueprint::try_from_db(&self.blueprint_store, &self.blueprint_query);
 
-                let maybe_visualizable_entities_per_visualizer = self
-                    .view_class_registry
-                    .maybe_visualizable_entities_for_visualizer_systems(
-                        &self.recording_store.store_id(),
-                    );
                 let mut query_results = HashMap::default();
 
                 self.run(egui_ctx, |ctx| {
@@ -81,7 +74,7 @@ impl TestContextExt for TestContext {
                                 .class(class_identifier)
                                 .unwrap_or_else(|| panic!("The class '{class_identifier}' must be registered beforehand"))
                                 .determine_visualizable_entities(
-                                    &maybe_visualizable_entities_per_visualizer,
+                                    ctx.maybe_visualizable_entities_per_visualizer,
                                     ctx.recording(),
                                     &ctx.view_class_registry()
                                         .new_visualizer_collection(class_identifier),
@@ -96,14 +89,13 @@ impl TestContextExt for TestContext {
                                 ctx.store_context,
                                 ctx.view_class_registry(),
                                 ctx.blueprint_query,
-                                *view_id,
                                 &visualizable_entities,
                             );
 
-                            let resolver = view_blueprint.contents.build_resolver(
-                                ctx.view_class_registry(),
+                            let resolver = DataQueryPropertyResolver::new(
                                 view_blueprint,
-                                &maybe_visualizable_entities_per_visualizer,
+                                ctx.view_class_registry(),
+                                ctx.maybe_visualizable_entities_per_visualizer,
                                 &visualizable_entities,
                                 &indicated_entities_per_visualizer,
                             );

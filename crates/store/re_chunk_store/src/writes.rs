@@ -8,8 +8,8 @@ use re_byte_size::SizeBytes;
 use re_chunk::{Chunk, EntityPath, RowId};
 
 use crate::{
-    store::ChunkIdSetPerTime, ChunkStore, ChunkStoreChunkStats, ChunkStoreConfig, ChunkStoreDiff,
-    ChunkStoreError, ChunkStoreEvent, ChunkStoreResult, ColumnMetadataState,
+    ChunkStore, ChunkStoreChunkStats, ChunkStoreConfig, ChunkStoreDiff, ChunkStoreError,
+    ChunkStoreEvent, ChunkStoreResult, ColumnMetadataState, store::ChunkIdSetPerTime,
 };
 
 // Used all over in docstrings.
@@ -49,32 +49,7 @@ impl ChunkStore {
 
         self.insert_id += 1;
 
-        let mut chunk = Arc::clone(chunk);
-
-        // We're in a transition period during which the Rerun ecosystem is slowly moving over to tagged data.
-        //
-        // During that time, it is common to end up in situations where the blueprint intermixes both tagged
-        // and untagged components, which invariably leads to undefined behavior.
-        // To prevent that, we just always hot-patch it to untagged, for now.
-        //
-        // Examples:
-        // * An SDK logs a blueprint (tagged), which is then updated by the viewer (which uses untagged log calls).
-        // * Somebody loads an old .rbl from somewhere and starts logging new blueprint data to it.
-        // * Etc.
-        if self.id.kind == re_log_types::StoreKind::Blueprint {
-            let patched = chunk.patched_for_blueprint_021_compat();
-            chunk = Arc::new(patched);
-        }
-
-        #[cfg(debug_assertions)]
-        for (component_name, per_desc) in chunk.components().iter() {
-            assert!(
-                per_desc.len() <= 1,
-                "[DEBUG ONLY] Insert Chunk with multiple values for component named `{component_name}`: this is currently UB\n{chunk}",
-            );
-        }
-
-        let non_compacted_chunk = Arc::clone(&chunk); // we'll need it to create the store event
+        let non_compacted_chunk = Arc::clone(chunk); // we'll need it to create the store event
 
         let (chunk, diffs) = if chunk.is_static() {
             // Static data: make sure to keep the most recent chunk available for each component column.
@@ -84,7 +59,7 @@ impl ChunkStore {
 
             let mut overwritten_chunk_ids = HashMap::default();
 
-            for (component_desc, list_array) in chunk.components().iter_flattened() {
+            for (component_desc, list_array) in chunk.components().iter() {
                 let is_empty = list_array
                     .nulls()
                     .is_some_and(|validity| validity.is_empty());
@@ -93,9 +68,7 @@ impl ChunkStore {
                 }
 
                 let Some((_row_id_min_for_component, row_id_max_for_component)) =
-                    row_id_range_per_component
-                        .get(&component_desc.component_name)
-                        .and_then(|per_desc| per_desc.get(component_desc))
+                    row_id_range_per_component.get(component_desc)
                 else {
                     continue;
                 };
@@ -103,7 +76,7 @@ impl ChunkStore {
                 self.static_chunk_ids_per_entity
                     .entry(chunk.entity_path().clone())
                     .or_default()
-                    .entry(component_desc.component_name)
+                    .entry(component_desc.clone())
                     .and_modify(|cur_chunk_id| {
                         // NOTE: When attempting to overwrite static data, the chunk with the most
                         // recent data within -- according to RowId -- wins.
@@ -114,8 +87,7 @@ impl ChunkStore {
                             .map_or(RowId::ZERO, |chunk| {
                                 chunk
                                     .row_id_range_per_component()
-                                    .get(&component_desc.component_name)
-                                    .and_then(|per_desc| per_desc.get(component_desc))
+                                    .get(component_desc)
                                     .map_or(RowId::ZERO, |(_, row_id_max)| *row_id_max)
                             });
 
@@ -150,7 +122,7 @@ impl ChunkStore {
                     .or_insert_with(|| chunk.id());
             }
 
-            self.static_chunks_stats += ChunkStoreChunkStats::from_chunk(&chunk);
+            self.static_chunks_stats += ChunkStoreChunkStats::from_chunk(chunk);
 
             let mut diffs = vec![ChunkStoreDiff::addition(
                 non_compacted_chunk, /* added */
@@ -204,7 +176,7 @@ impl ChunkStore {
                 }
             }
 
-            (Arc::clone(&chunk), diffs)
+            (Arc::clone(chunk), diffs)
         } else {
             // Temporal data: just index the chunk on every dimension of interest.
             re_tracing::profile_scope!("temporal");
@@ -212,7 +184,7 @@ impl ChunkStore {
             let (elected_chunk, chunk_or_compacted) = {
                 re_tracing::profile_scope!("election");
 
-                let elected_chunk = self.find_and_elect_compaction_candidate(&chunk);
+                let elected_chunk = self.find_and_elect_compaction_candidate(chunk);
 
                 let chunk_or_compacted = if let Some(elected_chunk) = &elected_chunk {
                     let chunk_rowid_min = chunk.row_id_range().map(|(min, _)| min);
@@ -220,7 +192,7 @@ impl ChunkStore {
 
                     let mut compacted = if elected_rowid_min < chunk_rowid_min {
                         re_tracing::profile_scope!("concat");
-                        elected_chunk.concatenated(&chunk)?
+                        elected_chunk.concatenated(chunk)?
                     } else {
                         re_tracing::profile_scope!("concat");
                         chunk.concatenated(elected_chunk)?
@@ -243,7 +215,7 @@ impl ChunkStore {
 
                     Arc::new(compacted)
                 } else {
-                    Arc::clone(&chunk)
+                    Arc::clone(chunk)
                 };
 
                 (elected_chunk, chunk_or_compacted)
@@ -267,29 +239,27 @@ impl ChunkStore {
                     let temporal_chunk_ids_per_component =
                         temporal_chunk_ids_per_timeline.entry(timeline).or_default();
 
-                    for (component_name, per_desc) in time_range_per_component {
-                        for (_component_desc, time_range) in per_desc {
-                            let temporal_chunk_ids_per_time = temporal_chunk_ids_per_component
-                                .entry(component_name)
-                                .or_default();
+                    for (component_desc, time_range) in time_range_per_component {
+                        let temporal_chunk_ids_per_time = temporal_chunk_ids_per_component
+                            .entry(component_desc)
+                            .or_default();
 
-                            // See `ChunkIdSetPerTime::max_interval_length`'s documentation.
-                            temporal_chunk_ids_per_time.max_interval_length = u64::max(
-                                temporal_chunk_ids_per_time.max_interval_length,
-                                time_range.abs_length(),
-                            );
+                        // See `ChunkIdSetPerTime::max_interval_length`'s documentation.
+                        temporal_chunk_ids_per_time.max_interval_length = u64::max(
+                            temporal_chunk_ids_per_time.max_interval_length,
+                            time_range.abs_length(),
+                        );
 
-                            temporal_chunk_ids_per_time
-                                .per_start_time
-                                .entry(time_range.min())
-                                .or_default()
-                                .insert(chunk_or_compacted.id());
-                            temporal_chunk_ids_per_time
-                                .per_end_time
-                                .entry(time_range.max())
-                                .or_default()
-                                .insert(chunk_or_compacted.id());
-                        }
+                        temporal_chunk_ids_per_time
+                            .per_start_time
+                            .entry(time_range.min())
+                            .or_default()
+                            .insert(chunk_or_compacted.id());
+                        temporal_chunk_ids_per_time
+                            .per_end_time
+                            .entry(time_range.max())
+                            .or_default()
+                            .insert(chunk_or_compacted.id());
                     }
                 }
             }
@@ -380,31 +350,46 @@ impl ChunkStore {
             }
         }
 
-        for (component_descr, list_array) in chunk.components().iter_flattened() {
-            if let Some(old_typ) = self
-                .type_registry
-                .insert(component_descr.component_name, list_array.value_type())
-            {
-                if old_typ != list_array.value_type() {
-                    re_log::warn_once!(
-                        "Component column '{}' changed type from {old_typ:?} to {:?}",
-                        component_descr.component_name,
-                        list_array.value_type()
-                    );
+        for (component_descr, list_array) in chunk.components().iter() {
+            if let Some(component_type) = component_descr.component_type {
+                if let Some(old_typ) = self
+                    .type_registry
+                    .insert(component_type, list_array.value_type())
+                {
+                    if old_typ != list_array.value_type() {
+                        re_log::warn_once!(
+                            "Component column '{}' changed type from {old_typ:?} to {:?}",
+                            component_type,
+                            list_array.value_type()
+                        );
+                    }
                 }
             }
 
-            let column_metadata_state = self
+            let (descr, column_metadata_state, datatype) = self
                 .per_column_metadata
                 .entry(chunk.entity_path().clone())
                 .or_default()
-                .entry(component_descr.component_name)
-                .or_default()
-                .entry(component_descr.clone())
-                .or_insert(ColumnMetadataState {
-                    is_semantically_empty: true,
-                });
+                .entry(component_descr.component)
+                .or_insert((
+                    component_descr.clone(),
+                    ColumnMetadataState {
+                        is_semantically_empty: true,
+                    },
+                    list_array.value_type().clone(),
+                ));
             {
+                if *datatype != list_array.value_type() {
+                    // TODO(grtlr): If we encounter two different data types, we should split the chunk.
+                    // More information: https://github.com/rerun-io/rerun/pull/10082#discussion_r2140549340
+                    re_log::warn!(
+                        "Datatype of column {descr} in {} has changed from {datatype} to {}",
+                        chunk.entity_path(),
+                        list_array.value_type()
+                    );
+                    *datatype = list_array.value_type().clone();
+                }
+
                 let is_semantically_empty =
                     re_arrow_util::is_list_array_semantically_empty(list_array);
 
@@ -461,9 +446,10 @@ impl ChunkStore {
                 *candidates_below_threshold
                     .entry(candidate_chunk_id)
                     .or_insert_with(|| {
-                        store.chunks_per_chunk_id.get(&candidate_chunk_id).map_or(
-                            false,
-                            |candidate| {
+                        store
+                            .chunks_per_chunk_id
+                            .get(&candidate_chunk_id)
+                            .is_some_and(|candidate| {
                                 if !chunk.concatenable(candidate) {
                                     return false;
                                 }
@@ -480,8 +466,7 @@ impl ChunkStore {
                                 };
 
                                 is_below_bytes_threshold && is_below_rows_threshold
-                            },
-                        )
+                            })
                     })
             };
 
@@ -498,50 +483,48 @@ impl ChunkStore {
                 continue;
             };
 
-            for (component_name, per_desc) in time_range_per_component {
-                for (_component_desc, time_range) in per_desc {
-                    let Some(temporal_chunk_ids_per_time) =
-                        temporal_chunk_ids_per_component.get(&component_name)
-                    else {
-                        continue;
-                    };
+            for (component_desc, time_range) in time_range_per_component {
+                let Some(temporal_chunk_ids_per_time) =
+                    temporal_chunk_ids_per_component.get(&component_desc)
+                else {
+                    continue;
+                };
 
+                {
+                    // Direct neighbors (before): 1 point each.
+                    if let Some((_data_time, chunk_id_set)) = temporal_chunk_ids_per_time
+                        .per_start_time
+                        .range(..time_range.min())
+                        .next_back()
                     {
-                        // Direct neighbors (before): 1 point each.
-                        if let Some((_data_time, chunk_id_set)) = temporal_chunk_ids_per_time
-                            .per_start_time
-                            .range(..time_range.min())
-                            .next_back()
-                        {
-                            for &chunk_id in chunk_id_set {
-                                if check_if_chunk_below_threshold(self, chunk_id) {
-                                    *candidates.entry(chunk_id).or_default() += 1;
-                                }
-                            }
-                        }
-
-                        // Direct neighbors (after): 1 point each.
-                        if let Some((_data_time, chunk_id_set)) = temporal_chunk_ids_per_time
-                            .per_start_time
-                            .range(time_range.max().inc()..)
-                            .next()
-                        {
-                            for &chunk_id in chunk_id_set {
-                                if check_if_chunk_below_threshold(self, chunk_id) {
-                                    *candidates.entry(chunk_id).or_default() += 1;
-                                }
-                            }
-                        }
-
-                        let chunk_id_set = temporal_chunk_ids_per_time
-                            .per_start_time
-                            .get(&time_range.min());
-
-                        // Shared start times: 2 points each.
-                        for chunk_id in chunk_id_set.iter().flat_map(|set| set.iter().copied()) {
+                        for &chunk_id in chunk_id_set {
                             if check_if_chunk_below_threshold(self, chunk_id) {
-                                *candidates.entry(chunk_id).or_default() += 2;
+                                *candidates.entry(chunk_id).or_default() += 1;
                             }
+                        }
+                    }
+
+                    // Direct neighbors (after): 1 point each.
+                    if let Some((_data_time, chunk_id_set)) = temporal_chunk_ids_per_time
+                        .per_start_time
+                        .range(time_range.max().inc()..)
+                        .next()
+                    {
+                        for &chunk_id in chunk_id_set {
+                            if check_if_chunk_below_threshold(self, chunk_id) {
+                                *candidates.entry(chunk_id).or_default() += 1;
+                            }
+                        }
+                    }
+
+                    let chunk_id_set = temporal_chunk_ids_per_time
+                        .per_start_time
+                        .get(&time_range.min());
+
+                    // Shared start times: 2 points each.
+                    for chunk_id in chunk_id_set.iter().flat_map(|set| set.iter().copied()) {
+                        if check_if_chunk_below_threshold(self, chunk_id) {
+                            *candidates.entry(chunk_id).or_default() += 2;
                         }
                     }
                 }
@@ -674,7 +657,7 @@ impl ChunkStore {
 #[cfg(test)]
 mod tests {
     use re_chunk::{TimePoint, Timeline};
-    use re_log_types::example_components::{MyColor, MyLabel, MyPoint};
+    use re_log_types::example_components::{MyColor, MyLabel, MyPoint, MyPoints};
     use similar_asserts::assert_eq;
 
     use crate::ChunkStoreDiffKind;
@@ -720,22 +703,62 @@ mod tests {
         let points5 = &[MyPoint::new(5.0, 5.0)];
 
         let chunk1 = Chunk::builder(entity_path.clone())
-            .with_component_batches(row_id1, timepoint1, [points1 as _])
-            .with_component_batches(row_id2, timepoint2, [points2 as _])
-            .with_component_batches(row_id3, timepoint3, [points3 as _])
+            .with_component_batches(
+                row_id1,
+                timepoint1,
+                [(MyPoints::descriptor_points(), points1 as _)],
+            )
+            .with_component_batches(
+                row_id2,
+                timepoint2,
+                [(MyPoints::descriptor_points(), points2 as _)],
+            )
+            .with_component_batches(
+                row_id3,
+                timepoint3,
+                [(MyPoints::descriptor_points(), points3 as _)],
+            )
             .build()?;
         let chunk2 = Chunk::builder(entity_path.clone())
-            .with_component_batches(row_id4, timepoint4, [points4 as _])
-            .with_component_batches(row_id5, timepoint5, [points5 as _])
+            .with_component_batches(
+                row_id4,
+                timepoint4,
+                [(MyPoints::descriptor_points(), points4 as _)],
+            )
+            .with_component_batches(
+                row_id5,
+                timepoint5,
+                [(MyPoints::descriptor_points(), points5 as _)],
+            )
             .build()?;
         let chunk3 = Chunk::builder(entity_path.clone())
-            .with_component_batches(row_id6, timepoint1, [points1 as _])
-            .with_component_batches(row_id7, timepoint2, [points2 as _])
-            .with_component_batches(row_id8, timepoint3, [points3 as _])
+            .with_component_batches(
+                row_id6,
+                timepoint1,
+                [(MyPoints::descriptor_points(), points1 as _)],
+            )
+            .with_component_batches(
+                row_id7,
+                timepoint2,
+                [(MyPoints::descriptor_points(), points2 as _)],
+            )
+            .with_component_batches(
+                row_id8,
+                timepoint3,
+                [(MyPoints::descriptor_points(), points3 as _)],
+            )
             .build()?;
         let chunk4 = Chunk::builder(entity_path.clone())
-            .with_component_batches(row_id9, timepoint4, [points4 as _])
-            .with_component_batches(row_id10, timepoint5, [points5 as _])
+            .with_component_batches(
+                row_id9,
+                timepoint4,
+                [(MyPoints::descriptor_points(), points4 as _)],
+            )
+            .with_component_batches(
+                row_id10,
+                timepoint5,
+                [(MyPoints::descriptor_points(), points5 as _)],
+            )
             .build()?;
 
         let chunk1 = Arc::new(chunk1);
@@ -768,16 +791,56 @@ mod tests {
             .unwrap();
 
         let expected = Chunk::builder_with_id(got.id(), entity_path.clone())
-            .with_component_batches(row_id1, timepoint1, [points1 as _])
-            .with_component_batches(row_id2, timepoint2, [points2 as _])
-            .with_component_batches(row_id3, timepoint3, [points3 as _])
-            .with_component_batches(row_id4, timepoint4, [points4 as _])
-            .with_component_batches(row_id5, timepoint5, [points5 as _])
-            .with_component_batches(row_id6, timepoint1, [points1 as _])
-            .with_component_batches(row_id7, timepoint2, [points2 as _])
-            .with_component_batches(row_id8, timepoint3, [points3 as _])
-            .with_component_batches(row_id9, timepoint4, [points4 as _])
-            .with_component_batches(row_id10, timepoint5, [points5 as _])
+            .with_component_batches(
+                row_id1,
+                timepoint1,
+                [(MyPoints::descriptor_points(), points1 as _)],
+            )
+            .with_component_batches(
+                row_id2,
+                timepoint2,
+                [(MyPoints::descriptor_points(), points2 as _)],
+            )
+            .with_component_batches(
+                row_id3,
+                timepoint3,
+                [(MyPoints::descriptor_points(), points3 as _)],
+            )
+            .with_component_batches(
+                row_id4,
+                timepoint4,
+                [(MyPoints::descriptor_points(), points4 as _)],
+            )
+            .with_component_batches(
+                row_id5,
+                timepoint5,
+                [(MyPoints::descriptor_points(), points5 as _)],
+            )
+            .with_component_batches(
+                row_id6,
+                timepoint1,
+                [(MyPoints::descriptor_points(), points1 as _)],
+            )
+            .with_component_batches(
+                row_id7,
+                timepoint2,
+                [(MyPoints::descriptor_points(), points2 as _)],
+            )
+            .with_component_batches(
+                row_id8,
+                timepoint3,
+                [(MyPoints::descriptor_points(), points3 as _)],
+            )
+            .with_component_batches(
+                row_id9,
+                timepoint4,
+                [(MyPoints::descriptor_points(), points4 as _)],
+            )
+            .with_component_batches(
+                row_id10,
+                timepoint5,
+                [(MyPoints::descriptor_points(), points5 as _)],
+            )
             .build()?;
 
         assert_eq!(1, store.chunks_per_chunk_id.len());
@@ -825,18 +888,29 @@ mod tests {
             .with_component_batches(
                 row_id1_1,
                 timepoint_static.clone(),
-                [points1 as _, colors1 as _, labels1 as _],
+                [
+                    (MyPoints::descriptor_points(), points1 as _),
+                    (MyPoints::descriptor_colors(), colors1 as _),
+                    (MyPoints::descriptor_labels(), labels1 as _),
+                ],
             )
             .build()?;
         let chunk2 = Chunk::builder(entity_path.clone())
             .with_component_batches(
                 row_id2_1,
                 timepoint_static.clone(),
-                [points2 as _, colors2 as _],
+                [
+                    (MyPoints::descriptor_points(), points2 as _),
+                    (MyPoints::descriptor_colors(), colors2 as _),
+                ],
             )
             .build()?;
         let chunk3 = Chunk::builder(entity_path.clone())
-            .with_component_batches(row_id2_2, timepoint_static, [labels2 as _])
+            .with_component_batches(
+                row_id2_2,
+                timepoint_static,
+                [(MyPoints::descriptor_labels(), labels2 as _)],
+            )
             .build()?;
 
         let chunk1 = Arc::new(chunk1);

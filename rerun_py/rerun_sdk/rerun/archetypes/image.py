@@ -72,15 +72,15 @@ class Image(ImageExt, Archetype):
     rr.init("rerun_example_image_formats", spawn=True)
 
     # Simple gradient image, logged in different formats.
-    image = np.array([[[x, min(255, x + y), y] for x in range(0, 256)] for y in range(0, 256)], dtype=np.uint8)
+    image = np.array([[[x, min(255, x + y), y] for x in range(256)] for y in range(256)], dtype=np.uint8)
     rr.log("image_rgb", rr.Image(image))
     rr.log("image_green_only", rr.Image(image[:, :, 1], color_model="l"))  # Luminance only
     rr.log("image_bgr", rr.Image(image[:, :, ::-1], color_model="bgr"))  # BGR
 
     # New image with Separate Y/U/V planes with 4:2:2 chroma downsampling
-    y = bytes([128 for y in range(0, 256) for x in range(0, 256)])
-    u = bytes([x * 2 for y in range(0, 256) for x in range(0, 128)])  # Half horizontal resolution for chroma.
-    v = bytes([y for y in range(0, 256) for x in range(0, 128)])
+    y = bytes([128 for y in range(256) for x in range(256)])
+    u = bytes([x * 2 for y in range(256) for x in range(128)])  # Half horizontal resolution for chroma.
+    v = bytes([y for y in range(256) for x in range(128)])
     rr.log("image_yuv422", rr.Image(bytes=y + u + v, width=256, height=256, pixel_format=rr.PixelFormat.Y_U_V16_FullRange))
     ```
     <center>
@@ -142,6 +142,7 @@ class Image(ImageExt, Archetype):
             An optional floating point value that specifies the 2D drawing order.
 
             Objects with higher values are drawn on top of those with lower values.
+            Defaults to `-10.0`.
 
         """
 
@@ -199,6 +200,7 @@ class Image(ImageExt, Archetype):
             An optional floating point value that specifies the 2D drawing order.
 
             Objects with higher values are drawn on top of those with lower values.
+            Defaults to `-10.0`.
 
         """
 
@@ -215,19 +217,32 @@ class Image(ImageExt, Archetype):
         if len(batches) == 0:
             return ComponentColumnList([])
 
-        kwargs = {"buffer": buffer, "format": format, "opacity": opacity, "draw_order": draw_order}
+        kwargs = {
+            "Image:buffer": buffer,
+            "Image:format": format,
+            "Image:opacity": opacity,
+            "Image:draw_order": draw_order,
+        }
         columns = []
 
         for batch in batches:
             arrow_array = batch.as_arrow_array()
 
-            # For primitive arrays, we infer partition size from the input shape.
-            if pa.types.is_primitive(arrow_array.type):
-                param = kwargs[batch.component_descriptor().archetype_field_name]  # type: ignore[index]
+            # For primitive arrays and fixed size list arrays, we infer partition size from the input shape.
+            if pa.types.is_primitive(arrow_array.type) or pa.types.is_fixed_size_list(arrow_array.type):
+                param = kwargs[batch.component_descriptor().component]  # type: ignore[index]
                 shape = np.shape(param)  # type: ignore[arg-type]
+                elem_flat_len = int(np.prod(shape[1:])) if len(shape) > 1 else 1  # type: ignore[redundant-expr,misc]
 
-                batch_length = shape[1] if len(shape) > 1 else 1
-                num_rows = shape[0] if len(shape) >= 1 else 1
+                if pa.types.is_fixed_size_list(arrow_array.type) and arrow_array.type.list_size == elem_flat_len:
+                    # If the product of the last dimensions of the shape are equal to the size of the fixed size list array,
+                    # we have `num_rows` single element batches (each element is a fixed sized list).
+                    # (This should have been already validated by conversion to the arrow_array)
+                    batch_length = 1
+                else:
+                    batch_length = shape[1] if len(shape) > 1 else 1  # type: ignore[redundant-expr,misc]
+
+                num_rows = shape[0] if len(shape) >= 1 else 1  # type: ignore[redundant-expr,misc]
                 sizes = batch_length * np.ones(num_rows)
             else:
                 # For non-primitive types, default to partitioning each element separately.
@@ -275,6 +290,7 @@ class Image(ImageExt, Archetype):
     # An optional floating point value that specifies the 2D drawing order.
     #
     # Objects with higher values are drawn on top of those with lower values.
+    # Defaults to `-10.0`.
     #
     # (Docstring intentionally commented out to hide this field from the docs)
 

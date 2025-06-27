@@ -1,9 +1,8 @@
-use anyhow::Context;
-use itertools::Itertools;
+use anyhow::Context as _;
+use itertools::Itertools as _;
 
 use re_byte_size::SizeBytes as _;
 use re_log_types::{LogMsg, SetStoreInfo};
-use re_sdk::log::Chunk;
 
 use crate::commands::read_rrd_streams_from_file_or_stdin;
 
@@ -41,23 +40,21 @@ impl PrintCommand {
             continue_on_error,
         } = self;
 
-        // TODO(cmc): might want to make this configurable at some point.
-        let version_policy = re_log_encoding::VersionPolicy::Warn;
-        let (rx, _) = read_rrd_streams_from_file_or_stdin(version_policy, path_to_input_rrds);
+        let (rx, _) = read_rrd_streams_from_file_or_stdin(path_to_input_rrds);
 
-        for res in rx {
+        for (_source, res) in rx {
             let mut is_success = true;
 
             match res {
                 Ok(msg) => {
                     if let Err(err) = print_msg(*verbose, msg) {
-                        re_log::error!(err = re_error::format(err));
+                        re_log::error_once!("{}", re_error::format(err));
                         is_success = false;
                     }
                 }
 
                 Err(err) => {
-                    re_log::error!(err = re_error::format(err));
+                    re_log::error_once!("{}", re_error::format(err));
                     is_success = false;
                 }
             }
@@ -81,11 +78,12 @@ fn print_msg(verbose: u8, msg: LogMsg) -> anyhow::Result<()> {
         }
 
         LogMsg::ArrowMsg(_row_id, arrow_msg) => {
-            let chunk = Chunk::from_arrow_msg(&arrow_msg).context("skipped corrupt chunk")?;
+            let mut chunk =
+                re_sorbet::ChunkBatch::try_from(&arrow_msg.batch).context("corrupt chunk")?;
 
             print!(
                 "Chunk({}) with {} rows ({}) - {:?} - ",
-                chunk.id(),
+                chunk.chunk_id(),
                 chunk.num_rows(),
                 re_format::format_bytes(chunk.total_size_bytes() as _),
                 chunk.entity_path(),
@@ -93,21 +91,37 @@ fn print_msg(verbose: u8, msg: LogMsg) -> anyhow::Result<()> {
 
             if verbose == 0 {
                 let column_names = chunk
-                    .component_names()
-                    .map(|name| name.short_name())
+                    .component_columns()
+                    .map(|(descr, _)| descr.column_name(re_sorbet::BatchType::Dataframe))
                     .join(" ");
                 println!("columns: [{column_names}]");
             } else if verbose == 1 {
                 let column_descriptors = chunk
-                    .component_descriptors()
-                    .map(|descr| descr.short_name())
+                    .component_columns()
+                    .map(|(descr, _)| descr.to_string())
                     .collect_vec()
                     .join(" ");
                 println!("columns: [{column_descriptors}]",);
             } else if verbose == 2 {
-                println!("\n{}", chunk.emptied()); // headers only
+                chunk = chunk.drop_all_rows();
+
+                let options = re_format_arrow::RecordBatchFormatOpts {
+                    transposed: false, // TODO(emilk): have transposed default to true when we can also include per-column metadata
+                    ..Default::default()
+                };
+                println!(
+                    "\n{}\n",
+                    re_format_arrow::format_record_batch_opts(&chunk, &options)
+                );
             } else {
-                println!("\n{chunk}");
+                let options = re_format_arrow::RecordBatchFormatOpts {
+                    transposed: false, // TODO(emilk): add cli option for this
+                    ..Default::default()
+                };
+                println!(
+                    "\n{}\n",
+                    re_format_arrow::format_record_batch_opts(&chunk, &options)
+                );
             }
         }
 
@@ -116,7 +130,9 @@ fn print_msg(verbose: u8, msg: LogMsg) -> anyhow::Result<()> {
             make_active,
             make_default,
         }) => {
-            println!("BlueprintActivationCommand({blueprint_id}, make_active: {make_active}, make_default: {make_default})");
+            println!(
+                "BlueprintActivationCommand({blueprint_id}, make_active: {make_active}, make_default: {make_default})"
+            );
         }
     }
 

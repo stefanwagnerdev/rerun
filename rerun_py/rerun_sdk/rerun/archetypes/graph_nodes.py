@@ -37,7 +37,9 @@ class GraphNodes(Archetype):
     rr.log(
         "simple",
         rr.GraphNodes(
-            node_ids=["a", "b", "c"], positions=[(0.0, 100.0), (-100.0, 0.0), (100.0, 0.0)], labels=["A", "B", "C"]
+            node_ids=["a", "b", "c"],
+            positions=[(0.0, 100.0), (-100.0, 0.0), (100.0, 0.0)],
+            labels=["A", "B", "C"],
         ),
         rr.GraphEdges(edges=[("a", "b"), ("b", "c"), ("c", "a")], graph_type="directed"),
     )
@@ -63,7 +65,7 @@ class GraphNodes(Archetype):
         labels: datatypes.Utf8ArrayLike | None = None,
         show_labels: datatypes.BoolLike | None = None,
         radii: datatypes.Float32ArrayLike | None = None,
-    ):
+    ) -> None:
         """
         Create a new instance of the GraphNodes archetype.
 
@@ -78,7 +80,10 @@ class GraphNodes(Archetype):
         labels:
             Optional text labels for the node.
         show_labels:
-            Optional choice of whether the text labels should be shown by default.
+            Whether the text labels should be shown.
+
+            If not set, labels will automatically appear when there is exactly one label for this entity
+            or the number of instances on this entity is under a certain threshold.
         radii:
             Optional radii for nodes.
 
@@ -143,7 +148,10 @@ class GraphNodes(Archetype):
         labels:
             Optional text labels for the node.
         show_labels:
-            Optional choice of whether the text labels should be shown by default.
+            Whether the text labels should be shown.
+
+            If not set, labels will automatically appear when there is exactly one label for this entity
+            or the number of instances on this entity is under a certain threshold.
         radii:
             Optional radii for nodes.
 
@@ -204,7 +212,10 @@ class GraphNodes(Archetype):
         labels:
             Optional text labels for the node.
         show_labels:
-            Optional choice of whether the text labels should be shown by default.
+            Whether the text labels should be shown.
+
+            If not set, labels will automatically appear when there is exactly one label for this entity
+            or the number of instances on this entity is under a certain threshold.
         radii:
             Optional radii for nodes.
 
@@ -226,25 +237,33 @@ class GraphNodes(Archetype):
             return ComponentColumnList([])
 
         kwargs = {
-            "node_ids": node_ids,
-            "positions": positions,
-            "colors": colors,
-            "labels": labels,
-            "show_labels": show_labels,
-            "radii": radii,
+            "GraphNodes:node_ids": node_ids,
+            "GraphNodes:positions": positions,
+            "GraphNodes:colors": colors,
+            "GraphNodes:labels": labels,
+            "GraphNodes:show_labels": show_labels,
+            "GraphNodes:radii": radii,
         }
         columns = []
 
         for batch in batches:
             arrow_array = batch.as_arrow_array()
 
-            # For primitive arrays, we infer partition size from the input shape.
-            if pa.types.is_primitive(arrow_array.type):
-                param = kwargs[batch.component_descriptor().archetype_field_name]  # type: ignore[index]
+            # For primitive arrays and fixed size list arrays, we infer partition size from the input shape.
+            if pa.types.is_primitive(arrow_array.type) or pa.types.is_fixed_size_list(arrow_array.type):
+                param = kwargs[batch.component_descriptor().component]  # type: ignore[index]
                 shape = np.shape(param)  # type: ignore[arg-type]
+                elem_flat_len = int(np.prod(shape[1:])) if len(shape) > 1 else 1  # type: ignore[redundant-expr,misc]
 
-                batch_length = shape[1] if len(shape) > 1 else 1
-                num_rows = shape[0] if len(shape) >= 1 else 1
+                if pa.types.is_fixed_size_list(arrow_array.type) and arrow_array.type.list_size == elem_flat_len:
+                    # If the product of the last dimensions of the shape are equal to the size of the fixed size list array,
+                    # we have `num_rows` single element batches (each element is a fixed sized list).
+                    # (This should have been already validated by conversion to the arrow_array)
+                    batch_length = 1
+                else:
+                    batch_length = shape[1] if len(shape) > 1 else 1  # type: ignore[redundant-expr,misc]
+
+                num_rows = shape[0] if len(shape) >= 1 else 1  # type: ignore[redundant-expr,misc]
                 sizes = batch_length * np.ones(num_rows)
             else:
                 # For non-primitive types, default to partitioning each element separately.
@@ -296,7 +315,10 @@ class GraphNodes(Archetype):
         default=None,
         converter=components.ShowLabelsBatch._converter,  # type: ignore[misc]
     )
-    # Optional choice of whether the text labels should be shown by default.
+    # Whether the text labels should be shown.
+    #
+    # If not set, labels will automatically appear when there is exactly one label for this entity
+    # or the number of instances on this entity is under a certain threshold.
     #
     # (Docstring intentionally commented out to hide this field from the docs)
 

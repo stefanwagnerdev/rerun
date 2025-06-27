@@ -21,7 +21,7 @@ enum CameraMode {
 struct Outlines {
     is_paused: bool,
     camera_mode: CameraMode,
-    seconds_since_startup: f32,
+    secs_since_startup: f32,
     model_mesh_instances: Vec<GpuMeshInstance>,
 }
 
@@ -34,7 +34,7 @@ impl framework::Example for Outlines {
         Self {
             is_paused: false,
             camera_mode: CameraMode::Wobble,
-            seconds_since_startup: 0.0,
+            secs_since_startup: 0.0,
             model_mesh_instances: crate::framework::load_rerun_mesh(re_ctx)
                 .expect("Failed to load rerun mesh"),
         }
@@ -48,19 +48,19 @@ impl framework::Example for Outlines {
         pixels_per_point: f32,
     ) -> anyhow::Result<Vec<framework::ViewDrawResult>> {
         if !self.is_paused {
-            self.seconds_since_startup += time.last_frame_duration.as_secs_f32();
+            self.secs_since_startup += time.last_frame_duration.as_secs_f32();
         }
-        let seconds_since_startup = self.seconds_since_startup;
+        let secs_since_startup = self.secs_since_startup;
 
         let camera_position = match self.camera_mode {
             CameraMode::ZoomInAndOut => {
-                glam::vec3(1.0, 3.5, 7.0) * (seconds_since_startup.sin() + 1.4)
+                glam::vec3(1.0, 3.5, 7.0) * (secs_since_startup.sin() + 1.4)
             }
             CameraMode::Wobble => {
                 glam::vec3(
-                    seconds_since_startup.sin(),
-                    seconds_since_startup.sin() * 0.5,
-                    seconds_since_startup.cos(),
+                    secs_since_startup.sin(),
+                    secs_since_startup.sin() * 0.5,
+                    secs_since_startup.cos(),
                 ) * 7.0
             }
         };
@@ -70,7 +70,7 @@ impl framework::Example for Outlines {
             TargetConfiguration {
                 name: "WorldGridDemo".into(),
                 resolution_in_pixel: resolution,
-                view_from_world: re_math::IsoTransform::look_at_rh(
+                view_from_world: macaw::IsoTransform::look_at_rh(
                     camera_position,
                     glam::Vec3::ZERO,
                     glam::Vec3::Y,
@@ -97,7 +97,7 @@ impl framework::Example for Outlines {
                 color: re_renderer::Rgba::from_rgb(0.5, 0.5, 0.5),
                 spacing: 0.1,
                 thickness_ui: 1.0,
-                plane: re_math::Plane3::ZX,
+                plane: macaw::Plane3::ZX,
             },
         ));
         view_builder.queue_draw(re_renderer::renderer::MeshDrawData::new(

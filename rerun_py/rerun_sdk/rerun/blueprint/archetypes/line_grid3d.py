@@ -21,7 +21,11 @@ __all__ = ["LineGrid3D"]
 
 @define(str=False, repr=False, init=False)
 class LineGrid3D(Archetype):
-    """**Archetype**: Configuration for the 3D line grid."""
+    """
+    **Archetype**: Configuration for the 3D line grid.
+
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    """
 
     def __init__(
         self: Any,
@@ -31,7 +35,7 @@ class LineGrid3D(Archetype):
         plane: datatypes.Plane3DLike | None = None,
         stroke_width: datatypes.Float32Like | None = None,
         color: datatypes.Rgba32Like | None = None,
-    ):
+    ) -> None:
         """
         Create a new instance of the LineGrid3D archetype.
 

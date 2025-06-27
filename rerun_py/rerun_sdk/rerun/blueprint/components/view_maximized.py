@@ -8,7 +8,6 @@ from __future__ import annotations
 from ... import datatypes
 from ..._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -16,17 +15,20 @@ __all__ = ["ViewMaximized", "ViewMaximizedBatch"]
 
 
 class ViewMaximized(datatypes.Uuid, ComponentMixin):
-    """**Component**: Whether a view is maximized."""
+    """
+    **Component**: Whether a view is maximized.
+
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    """
 
     _BATCH_TYPE = None
     # You can define your own __init__ function as a member of ViewMaximizedExt in view_maximized_ext.py
 
     # Note: there are no fields here because ViewMaximized delegates to datatypes.Uuid
-    pass
 
 
 class ViewMaximizedBatch(datatypes.UuidBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.blueprint.components.ViewMaximized")
+    _COMPONENT_TYPE: str = "rerun.blueprint.components.ViewMaximized"
 
 
 # This is patched in late to avoid circular dependencies.

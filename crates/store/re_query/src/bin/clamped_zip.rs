@@ -1,6 +1,6 @@
 //! CLI tool to generate `ClampedZip` implementations of different arities.
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools as _, izip};
 
 struct Params {
     num_required: usize,

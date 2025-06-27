@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -26,11 +25,10 @@ class Resolution(datatypes.Vec2D, ComponentMixin):
     # You can define your own __init__ function as a member of ResolutionExt in resolution_ext.py
 
     # Note: there are no fields here because Resolution delegates to datatypes.Vec2D
-    pass
 
 
 class ResolutionBatch(datatypes.Vec2DBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.Resolution")
+    _COMPONENT_TYPE: str = "rerun.components.Resolution"
 
 
 # This is patched in late to avoid circular dependencies.

@@ -21,7 +21,11 @@ __all__ = ["ForceLink"]
 
 @define(str=False, repr=False, init=False)
 class ForceLink(Archetype):
-    """**Archetype**: Aims to achieve a target distance between two nodes that are connected by an edge."""
+    """
+    **Archetype**: Aims to achieve a target distance between two nodes that are connected by an edge.
+
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    """
 
     def __init__(
         self: Any,
@@ -29,7 +33,7 @@ class ForceLink(Archetype):
         enabled: datatypes.BoolLike | None = None,
         distance: datatypes.Float64Like | None = None,
         iterations: datatypes.UInt64Like | None = None,
-    ):
+    ) -> None:
         """
         Create a new instance of the ForceLink archetype.
 

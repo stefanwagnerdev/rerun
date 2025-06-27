@@ -1,33 +1,35 @@
 use itertools::Itertools as _;
 
 use re_types::{
-    archetypes::{self, SeriesPoint},
-    components::{Color, MarkerShape, MarkerSize, Name, Scalar, SeriesVisible},
-    external::arrow::datatypes::DataType as ArrowDatatype,
-    Archetype as _, Component as _, Loggable as _,
+    Archetype as _, archetypes,
+    components::{Color, MarkerShape, MarkerSize, Name, SeriesVisible},
 };
-use re_view::range_with_blueprint_resolved_data;
+use re_view::{clamped_or_nothing, range_with_blueprint_resolved_data};
 use re_viewer_context::{
-    auto_color_for_entity_path, external::re_entity_db::InstancePath, IdentifiedViewSystem,
-    QueryContext, TypedComponentFallbackProvider, ViewContext, ViewQuery, ViewStateExt as _,
-    ViewSystemExecutionError, VisualizerQueryInfo, VisualizerSystem,
+    IdentifiedViewSystem, QueryContext, TypedComponentFallbackProvider, ViewContext, ViewQuery,
+    ViewStateExt as _, ViewSystemExecutionError, VisualizerQueryInfo, VisualizerSystem,
+    auto_color_for_entity_path, external::re_entity_db::InstancePath,
 };
 
 use crate::{
+    PlotPoint, PlotPointAttrs, PlotSeries, PlotSeriesKind, ScatterAttrs,
+    series_query::{
+        all_scalars_indices, allocate_plot_points, collect_colors, collect_radius_ui,
+        collect_scalars, collect_series_name, collect_series_visibility, determine_num_series,
+    },
     util::{determine_time_per_pixel, determine_time_range, points_to_series},
     view_class::TimeSeriesViewState,
-    PlotPoint, PlotPointAttrs, PlotSeries, PlotSeriesKind, ScatterAttrs,
 };
 
-/// The system for rendering [`SeriesPoint`] archetypes.
+/// The system for rendering [`archetypes::SeriesPoints`] archetypes.
 #[derive(Default, Debug)]
-pub struct SeriesPointSystem {
+pub struct SeriesPointsSystem {
     pub all_series: Vec<PlotSeries>,
 }
 
-impl IdentifiedViewSystem for SeriesPointSystem {
+impl IdentifiedViewSystem for SeriesPointsSystem {
     fn identifier() -> re_viewer_context::ViewSystemIdentifier {
-        "SeriesPoint".into()
+        "SeriesPoints".into()
     }
 }
 
@@ -35,17 +37,14 @@ impl IdentifiedViewSystem for SeriesPointSystem {
 // visible.
 const DEFAULT_MARKER_SIZE: f32 = 3.0;
 
-impl VisualizerSystem for SeriesPointSystem {
+impl VisualizerSystem for SeriesPointsSystem {
     fn visualizer_query_info(&self) -> VisualizerQueryInfo {
-        let mut query_info = VisualizerQueryInfo::from_archetype::<archetypes::Scalar>();
-        query_info.queried.extend(
-            SeriesPoint::all_components()
-                .iter()
-                .map(|descr| descr.component_name),
-        );
+        let mut query_info = VisualizerQueryInfo::from_archetype::<archetypes::Scalars>();
+        query_info
+            .queried
+            .extend(archetypes::SeriesPoints::all_components().iter().cloned());
 
-        query_info.indicators =
-            std::iter::once(SeriesPoint::descriptor_indicator().component_name).collect();
+        query_info.indicators = [archetypes::SeriesPoints::descriptor_indicator()].into();
 
         query_info
     }
@@ -71,21 +70,21 @@ impl VisualizerSystem for SeriesPointSystem {
     }
 }
 
-impl TypedComponentFallbackProvider<Color> for SeriesPointSystem {
+impl TypedComponentFallbackProvider<Color> for SeriesPointsSystem {
     fn fallback_for(&self, ctx: &QueryContext<'_>) -> Color {
         auto_color_for_entity_path(ctx.target_entity_path)
     }
 }
 
-impl TypedComponentFallbackProvider<MarkerSize> for SeriesPointSystem {
+impl TypedComponentFallbackProvider<MarkerSize> for SeriesPointsSystem {
     fn fallback_for(&self, _ctx: &QueryContext<'_>) -> MarkerSize {
         MarkerSize::from(DEFAULT_MARKER_SIZE)
     }
 }
 
-impl TypedComponentFallbackProvider<Name> for SeriesPointSystem {
+impl TypedComponentFallbackProvider<Name> for SeriesPointsSystem {
     fn fallback_for(&self, ctx: &QueryContext<'_>) -> Name {
-        let state = ctx.view_state.downcast_ref::<TimeSeriesViewState>();
+        let state = ctx.view_state().downcast_ref::<TimeSeriesViewState>();
 
         state
             .ok()
@@ -104,15 +103,15 @@ impl TypedComponentFallbackProvider<Name> for SeriesPointSystem {
     }
 }
 
-impl TypedComponentFallbackProvider<SeriesVisible> for SeriesPointSystem {
+impl TypedComponentFallbackProvider<SeriesVisible> for SeriesPointsSystem {
     fn fallback_for(&self, _ctx: &QueryContext<'_>) -> SeriesVisible {
         true.into()
     }
 }
 
-re_viewer_context::impl_component_fallback_provider!(SeriesPointSystem => [Color, MarkerSize, Name, SeriesVisible]);
+re_viewer_context::impl_component_fallback_provider!(SeriesPointsSystem => [Color, MarkerSize, Name, SeriesVisible]);
 
-impl SeriesPointSystem {
+impl SeriesPointsSystem {
     fn load_scalars(&mut self, ctx: &ViewContext<'_>, query: &ViewQuery<'_>) {
         re_tracing::profile_function!();
 
@@ -120,7 +119,7 @@ impl SeriesPointSystem {
             egui_plot::PlotMemory::load(ctx.viewer_ctx.egui_ctx(), crate::plot_id(query.view_id));
         let time_per_pixel = determine_time_per_pixel(ctx.viewer_ctx, plot_mem.as_ref());
 
-        let data_results = query.iter_visible_data_results(ctx, Self::identifier());
+        let data_results = query.iter_visible_data_results(Self::identifier());
 
         let parallel_loading = true;
         if parallel_loading {
@@ -176,36 +175,7 @@ impl SeriesPointSystem {
         let current_query = ctx.current_query();
         let query_ctx = ctx.query_context(data_result, &current_query);
 
-        let fallback_color =
-            re_viewer_context::TypedComponentFallbackProvider::<Color>::fallback_for(
-                self, &query_ctx,
-            );
-
-        let fallback_size =
-            re_viewer_context::TypedComponentFallbackProvider::<MarkerSize>::fallback_for(
-                self, &query_ctx,
-            );
-
         let fallback_shape = MarkerShape::default();
-
-        // All the default values for a `PlotPoint`, accounting for both overrides and default
-        // values.
-        let default_point = PlotPoint {
-            time: 0,
-            value: 0.0,
-            attrs: PlotPointAttrs {
-                color: fallback_color.into(),
-                // NOTE: arguably, the `MarkerSize` value should be twice the `radius_ui`. We do
-                // stick to the semantics of `MarkerSize` == radius for backward compatibility and
-                // because markers need a decent radius value to be at all legible.
-                radius_ui: **fallback_size,
-                kind: PlotSeriesKind::Scatter(ScatterAttrs {
-                    marker: fallback_shape,
-                }),
-            },
-        };
-
-        let mut points;
 
         let time_offset = ctx
             .view_state
@@ -220,199 +190,65 @@ impl SeriesPointSystem {
             re_tracing::profile_scope!("primary", &data_result.entity_path.to_string());
 
             let entity_path = &data_result.entity_path;
-            let query = re_chunk_store::RangeQuery::new(view_query.timeline, time_range)
-                // We must fetch data with extended bounds, otherwise the query clamping would
-                // cut-off the data early at the edge of the view.
-                .include_extended_bounds(true);
+            let query = re_chunk_store::RangeQuery::new(view_query.timeline, time_range);
 
             let results = range_with_blueprint_resolved_data(
                 ctx,
                 None,
                 &query,
                 data_result,
-                [
-                    Color::name(),
-                    MarkerShape::name(),
-                    MarkerSize::name(),
-                    Name::name(),
-                    Scalar::name(),
-                    SeriesVisible::name(),
-                ],
+                archetypes::Scalars::all_components()
+                    .iter()
+                    .chain(archetypes::SeriesPoints::all_components().iter()),
             );
 
             // If we have no scalars, we can't do anything.
-            let Some(all_scalar_chunks) = results.get_required_chunks(&Scalar::name()) else {
+            let Some(all_scalar_chunks) =
+                results.get_required_chunks(archetypes::Scalars::descriptor_scalars())
+            else {
                 return;
             };
 
-            let all_scalars_indices = || {
-                all_scalar_chunks
-                    .iter()
-                    .flat_map(|chunk| {
-                        chunk.iter_component_indices(query.timeline(), &Scalar::name())
-                    })
-                    .map(|index| (index, ()))
+            // All the default values for a `PlotPoint`, accounting for both overrides and default values.
+            let fallback_color: Color = self.fallback_for(&query_ctx);
+            let fallback_size: MarkerSize = self.fallback_for(&query_ctx);
+            let default_point = PlotPoint {
+                time: 0,
+                value: 0.0,
+                attrs: PlotPointAttrs {
+                    color: fallback_color.into(),
+                    // NOTE: arguably, the `MarkerSize` value should be twice the `radius_ui`. We do
+                    // stick to the semantics of `MarkerSize` == radius for backward compatibility and
+                    // because markers need a decent radius value to be at all legible.
+                    radius_ui: **fallback_size,
+                    kind: PlotSeriesKind::Scatter(ScatterAttrs {
+                        marker: fallback_shape,
+                    }),
+                },
             };
 
-            // TODO(#9020): support multiple series.
-            let num_series = 1;
+            let num_series = determine_num_series(&all_scalar_chunks);
+            let mut points_per_series =
+                allocate_plot_points(&query, &default_point, &all_scalar_chunks, num_series);
 
-            // Determine per-series visibility flags.
-            let mut series_visibility_flags: Vec<bool> = results
-                .iter_as(*query.timeline(), SeriesVisible::name())
-                .slice::<bool>()
-                .next()
-                .map_or(Vec::new(), |(_, visible)| visible.iter().collect_vec());
-            series_visibility_flags.resize(num_series, true);
-
-            // Allocate all points.
-            {
-                re_tracing::profile_scope!("alloc");
-
-                points = all_scalar_chunks
-                    .iter()
-                    .flat_map(|chunk| {
-                        chunk.iter_component_indices(query.timeline(), &Scalar::name())
-                    })
-                    .map(|(data_time, _)| {
-                        debug_assert_eq!(Scalar::arrow_datatype(), ArrowDatatype::Float64);
-
-                        PlotPoint {
-                            time: data_time.as_i64(),
-                            ..default_point.clone()
-                        }
-                    })
-                    .collect_vec();
-            }
-
-            // Fill in values.
-            {
-                re_tracing::profile_scope!("fill values");
-
-                debug_assert_eq!(Scalar::arrow_datatype(), ArrowDatatype::Float64);
-                let mut i = 0;
-                all_scalar_chunks
-                        .iter()
-                        .flat_map(|chunk| chunk.iter_slices::<f64>(Scalar::name()))
-                        .for_each(|values| {
-                            if !values.is_empty() {
-                                if values.len() > 1 {
-                                    re_log::warn_once!(
-                                        "found a scalar batch in {entity_path:?} -- those have no effect"
-                                    );
-                                }
-
-                                points[i].value = values[0];
-                            } else {
-                                points[i].attrs.kind = PlotSeriesKind::Clear;
-                            }
-
-                            i += 1;
-                        });
-            }
-
-            // Fill in colors.
-            {
-                re_tracing::profile_scope!("fill colors");
-
-                debug_assert_eq!(Color::arrow_datatype(), ArrowDatatype::UInt32);
-
-                fn map_raw_color(raw: &[u32]) -> Option<re_renderer::Color32> {
-                    raw.first().map(|c| {
-                        let [a, b, g, r] = c.to_le_bytes();
-                        if a == 255 {
-                            // Common-case optimization
-                            re_renderer::Color32::from_rgb(r, g, b)
-                        } else {
-                            re_renderer::Color32::from_rgba_unmultiplied(r, g, b, a)
-                        }
-                    })
-                }
-
-                {
-                    let all_color_chunks = results.get_optional_chunks(&Color::name());
-
-                    if all_color_chunks.len() == 1 && all_color_chunks[0].is_static() {
-                        re_tracing::profile_scope!("override/default fast path");
-
-                        let color = all_color_chunks[0]
-                            .iter_slices::<u32>(Color::name())
-                            .next()
-                            .and_then(map_raw_color);
-
-                        if let Some(color) = color {
-                            points.iter_mut().for_each(|p| p.attrs.color = color);
-                        }
-                    } else {
-                        re_tracing::profile_scope!("standard path");
-
-                        let all_colors = all_color_chunks.iter().flat_map(|chunk| {
-                            itertools::izip!(
-                                chunk.iter_component_indices(query.timeline(), &Color::name()),
-                                chunk.iter_slices::<u32>(Color::name())
-                            )
-                        });
-
-                        let all_frames =
-                            re_query::range_zip_1x1(all_scalars_indices(), all_colors).enumerate();
-
-                        all_frames.for_each(|(i, (_index, _scalars, colors))| {
-                            if let Some(color) = colors.and_then(map_raw_color) {
-                                points[i].attrs.color = color;
-                            }
-                        });
-                    }
-                }
-            }
-
-            // Fill in marker sizes
-            {
-                re_tracing::profile_scope!("fill marker sizes");
-
-                debug_assert_eq!(MarkerSize::arrow_datatype(), ArrowDatatype::Float32);
-
-                {
-                    let all_marker_size_chunks = results.get_optional_chunks(&MarkerSize::name());
-
-                    if all_marker_size_chunks.len() == 1 && all_marker_size_chunks[0].is_static() {
-                        re_tracing::profile_scope!("override/default fast path");
-
-                        let marker_size = all_marker_size_chunks[0]
-                            .iter_slices::<f32>(MarkerSize::name())
-                            .next()
-                            .and_then(|marker_sizes| marker_sizes.first().copied());
-
-                        if let Some(marker_size) = marker_size {
-                            points
-                                .iter_mut()
-                                // `marker_size` is a radius, see NOTE above
-                                .for_each(|p| p.attrs.radius_ui = marker_size);
-                        }
-                    } else {
-                        re_tracing::profile_scope!("standard path");
-
-                        let all_marker_sizes = all_marker_size_chunks.iter().flat_map(|chunk| {
-                            itertools::izip!(
-                                chunk.iter_component_indices(query.timeline(), &MarkerSize::name()),
-                                chunk.iter_slices::<f32>(MarkerSize::name())
-                            )
-                        });
-
-                        let all_frames =
-                            re_query::range_zip_1x1(all_scalars_indices(), all_marker_sizes)
-                                .enumerate();
-
-                        all_frames.for_each(|(i, (_index, _scalars, marker_sizes))| {
-                            if let Some(marker_size) =
-                                marker_sizes.and_then(|marker_sizes| marker_sizes.first().copied())
-                            {
-                                // `marker_size` is a radius, see NOTE above
-                                points[i].attrs.radius_ui = marker_size;
-                            }
-                        });
-                    }
-                }
-            }
+            collect_scalars(&all_scalar_chunks, &mut points_per_series);
+            collect_colors(
+                entity_path,
+                &query,
+                &results,
+                &all_scalar_chunks,
+                &mut points_per_series,
+                &archetypes::SeriesPoints::descriptor_colors(),
+            );
+            collect_radius_ui(
+                &query,
+                &results,
+                &all_scalar_chunks,
+                &mut points_per_series,
+                &archetypes::SeriesPoints::descriptor_marker_sizes(),
+                // `marker_size` is a radius, see NOTE above
+                1.0,
+            );
 
             // Fill in marker shapes
             {
@@ -420,23 +256,28 @@ impl SeriesPointSystem {
 
                 {
                     let all_marker_shapes_chunks =
-                        results.get_optional_chunks(&MarkerShape::name());
+                        results.get_optional_chunks(archetypes::SeriesPoints::descriptor_markers());
 
                     if all_marker_shapes_chunks.len() == 1
                         && all_marker_shapes_chunks[0].is_static()
                     {
                         re_tracing::profile_scope!("override/default fast path");
 
-                        let marker_shape = all_marker_shapes_chunks[0]
-                            .iter_component::<MarkerShape>()
+                        if let Some(marker_shapes) = all_marker_shapes_chunks[0]
+                            .iter_component::<MarkerShape>(
+                                &archetypes::SeriesPoints::descriptor_markers(),
+                            )
                             .next()
-                            .and_then(|marker_shapes| marker_shapes.first().copied());
-
-                        if let Some(marker_shape) = marker_shape {
-                            for p in &mut points {
-                                p.attrs.kind = PlotSeriesKind::Scatter(ScatterAttrs {
-                                    marker: marker_shape,
-                                });
+                        {
+                            for (points, marker_shape) in points_per_series
+                                .iter_mut()
+                                .zip(clamped_or_nothing(marker_shapes.as_slice(), num_series))
+                            {
+                                for point in points {
+                                    point.attrs.kind = PlotSeriesKind::Scatter(ScatterAttrs {
+                                        marker: *marker_shape,
+                                    });
+                                }
                             }
                         }
                     } else {
@@ -444,7 +285,11 @@ impl SeriesPointSystem {
 
                         let mut all_marker_shapes_iters = all_marker_shapes_chunks
                             .iter()
-                            .map(|chunk| chunk.iter_component::<MarkerShape>())
+                            .map(|chunk| {
+                                chunk.iter_component::<MarkerShape>(
+                                    &archetypes::SeriesPoints::descriptor_markers(),
+                                )
+                            })
                             .collect_vec();
                         let all_marker_shapes_indexed = {
                             let all_marker_shapes = all_marker_shapes_iters
@@ -454,52 +299,92 @@ impl SeriesPointSystem {
                                 all_marker_shapes_chunks.iter().flat_map(|chunk| {
                                     chunk.iter_component_indices(
                                         query.timeline(),
-                                        &MarkerShape::name(),
+                                        &archetypes::SeriesPoints::descriptor_markers(),
                                     )
                                 });
                             itertools::izip!(all_marker_shapes_indices, all_marker_shapes)
                         };
 
                         let all_frames = re_query::range_zip_1x1(
-                            all_scalars_indices(),
+                            all_scalars_indices(&query, &all_scalar_chunks),
                             all_marker_shapes_indexed,
                         )
                         .enumerate();
 
-                        all_frames.for_each(|(i, (_index, _scalars, marker_shapes))| {
-                            if let Some(marker_shape) = marker_shapes
-                                .and_then(|marker_shapes| marker_shapes.first().copied())
-                            {
-                                points[i].attrs.kind = PlotSeriesKind::Scatter(ScatterAttrs {
-                                    marker: marker_shape,
-                                });
-                            }
-                        });
+                        // Simplified path for single series.
+                        if num_series == 1 {
+                            let points = &mut *points_per_series[0];
+                            all_frames.for_each(|(i, (_index, _scalars, marker_shapes))| {
+                                if let Some(marker) = marker_shapes
+                                    .and_then(|marker_shapes| marker_shapes.first().copied())
+                                {
+                                    points[i].attrs.kind =
+                                        PlotSeriesKind::Scatter(ScatterAttrs { marker });
+                                }
+                            });
+                        } else {
+                            all_frames.for_each(|(i, (_index, _scalars, marker_shapes))| {
+                                if let Some(marker_shapes) = marker_shapes {
+                                    for (points, marker) in points_per_series
+                                        .iter_mut()
+                                        .zip(clamped_or_nothing(&marker_shapes, num_series))
+                                    {
+                                        points[i].attrs.kind =
+                                            PlotSeriesKind::Scatter(ScatterAttrs {
+                                                marker: *marker,
+                                            });
+                                    }
+                                }
+                            });
+                        }
                     }
                 }
             }
 
-            // Extract the series name
-            let series_name = results
-                .get_optional_chunks(&Name::name())
-                .iter()
-                .find(|chunk| !chunk.is_empty())
-                .and_then(|chunk| chunk.component_mono::<Name>(0)?.ok())
-                .unwrap_or_else(|| self.fallback_for(&query_ctx));
-
-            // Now convert the `PlotPoints` into `Vec<PlotSeries>`
-            points_to_series(
-                InstancePath::entity_all(data_result.entity_path.clone()),
-                time_per_pixel,
-                series_visibility_flags[0],
-                points,
-                ctx.recording_engine().store(),
-                view_query,
-                series_name.into(),
-                // Aggregation for points is not supported.
-                re_types::components::AggregationPolicy::Off,
-                all_series,
+            let series_visibility = collect_series_visibility(
+                &query,
+                &results,
+                num_series,
+                archetypes::SeriesPoints::descriptor_visible_series(),
             );
+            let series_names = collect_series_name(
+                self,
+                &query_ctx,
+                &results,
+                num_series,
+                &archetypes::SeriesPoints::descriptor_names(),
+            );
+
+            debug_assert_eq!(points_per_series.len(), series_names.len());
+            for (instance, (points, label, visible)) in itertools::izip!(
+                points_per_series.into_iter(),
+                series_names.into_iter(),
+                series_visibility.into_iter()
+            )
+            .enumerate()
+            {
+                let instance_path = if num_series == 1 {
+                    InstancePath::entity_all(data_result.entity_path.clone())
+                } else {
+                    InstancePath::instance(
+                        data_result.entity_path.clone(),
+                        (instance as u64).into(),
+                    )
+                };
+
+                points_to_series(
+                    instance_path,
+                    time_per_pixel,
+                    visible,
+                    points,
+                    ctx.recording_engine().store(),
+                    view_query,
+                    label,
+                    // Aggregation for points is not supported.
+                    re_types::components::AggregationPolicy::Off,
+                    all_series,
+                );
+            }
         }
     }
 }

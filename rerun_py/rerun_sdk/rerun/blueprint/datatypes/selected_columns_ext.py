@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import itertools
-from typing import TYPE_CHECKING, Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 
@@ -16,14 +17,15 @@ class SelectedColumnsExt:
     """Extension for [SelectedColumns][rerun.blueprint.datatypes.SelectedColumns]."""
 
     def __init__(
-        self: Any, columns: Sequence[blueprint_datatypes.ComponentColumnSelectorLike | datatypes.Utf8Like]
+        self: Any,
+        columns: Sequence[blueprint_datatypes.ComponentColumnSelectorLike | datatypes.Utf8Like],
     ) -> None:
         """
         Create a new instance of the `SelectedColumns` datatype.
 
         Example:
         ```python
-        SelectedColumns(["timeline", "/entity/path:ComponentName"])
+        SelectedColumns(["timeline", "/entity/path:Component"])
         ```
 
         Parameters
@@ -33,7 +35,7 @@ class SelectedColumnsExt:
 
             The column must be either of the timeline, or component kind. Timeline columns can be specified using a
             `str` without any `:`, or an `Utf8`. Component columns can be specified using either a `str` in the form of
-            `"/entity/path:ComponentName"`, or a `ComponentColumnSelector`.
+            `"/entity/path:Component"`, or a `ComponentColumnSelector`.
 
         """
 
@@ -84,7 +86,7 @@ class SelectedColumnsExt:
             offsets=_compute_offsets(d.component_columns for d in data),
             values=ComponentColumnSelectorBatch(
                 list(itertools.chain.from_iterable(d.component_columns for d in data)),
-            ).as_arrow_array(),  # type: ignore[misc, arg-type]
+            ).as_arrow_array(),
             type=data_type.field(1).type,
         )
 

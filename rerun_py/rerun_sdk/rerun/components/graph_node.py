@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -22,11 +21,10 @@ class GraphNode(datatypes.Utf8, ComponentMixin):
     # You can define your own __init__ function as a member of GraphNodeExt in graph_node_ext.py
 
     # Note: there are no fields here because GraphNode delegates to datatypes.Utf8
-    pass
 
 
 class GraphNodeBatch(datatypes.Utf8Batch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.GraphNode")
+    _COMPONENT_TYPE: str = "rerun.components.GraphNode"
 
 
 # This is patched in late to avoid circular dependencies.

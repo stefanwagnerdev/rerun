@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -22,11 +21,10 @@ class Vector2D(datatypes.Vec2D, ComponentMixin):
     # You can define your own __init__ function as a member of Vector2DExt in vector2d_ext.py
 
     # Note: there are no fields here because Vector2D delegates to datatypes.Vec2D
-    pass
 
 
 class Vector2DBatch(datatypes.Vec2DBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.Vector2D")
+    _COMPONENT_TYPE: str = "rerun.components.Vector2D"
 
 
 # This is patched in late to avoid circular dependencies.

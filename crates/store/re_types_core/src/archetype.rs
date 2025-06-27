@@ -1,12 +1,12 @@
-use std::{borrow::Cow, sync::Arc};
+use std::sync::Arc;
 
 use crate::{
-    ComponentBatch, ComponentDescriptor, ComponentName, DeserializationResult, SerializationResult,
-    SerializedComponentBatch, _Backtrace,
+    ComponentBatch, ComponentDescriptor, ComponentType, DeserializationResult, SerializationResult,
+    SerializedComponentBatch,
 };
 
-#[allow(unused_imports)] // used in docstrings
-use crate::{Component, Loggable, LoggableBatch};
+#[expect(unused_imports, clippy::unused_trait_names)] // used in docstrings
+use crate::{Component, Loggable};
 
 // ---
 
@@ -31,7 +31,7 @@ pub trait Archetype {
     ///
     /// Since null arrays aren't actually arrays and we don't actually have any data to shuffle
     /// around per-se, we can't implement the usual [`Loggable`] traits.
-    /// For this reason, indicator components directly implement [`LoggableBatch`] instead, and
+    /// For this reason, indicator components directly implement [`ComponentBatch`] instead, and
     /// bypass the entire iterator machinery.
     //
     // TODO(rust-lang/rust#29661): We'd like to just default this to the right thing which is
@@ -107,7 +107,7 @@ pub trait Archetype {
         )
     }
 
-    /// Given an iterator of Arrow arrays and their respective `ComponentNames`, deserializes them
+    /// Given an iterator of Arrow arrays and their respective [`ComponentDescriptor`]s, deserializes them
     /// into this archetype.
     ///
     /// Arrow arrays that are unknown to this [`Archetype`] will simply be ignored and a warning
@@ -122,7 +122,7 @@ pub trait Archetype {
         _ = data; // NOTE: do this here to avoid breaking users' autocomplete snippets
         Err(crate::DeserializationError::NotImplemented {
             fqname: Self::name().to_string(),
-            backtrace: _Backtrace::new_unresolved(),
+            backtrace: std::backtrace::Backtrace::capture(),
         })
     }
 }
@@ -139,13 +139,20 @@ re_string_interner::declare_new_type!(
 );
 
 impl ArchetypeName {
+    /// Constructs a [`ComponentIdentifier`] from this archetype by supplying a field name.
+    #[inline]
+    pub fn with_field(&self, field_name: impl AsRef<str>) -> ComponentIdentifier {
+        format!("{}:{}", self.short_name(), field_name.as_ref()).into()
+    }
+
     /// Runs some asserts in debug mode to make sure the name is not weird.
     #[inline]
     #[track_caller]
     pub fn sanity_check(&self) {
         let full_name = self.0.as_str();
         debug_assert!(
-            !full_name.starts_with("rerun.archetypes.rerun.archetypes.") && !full_name.contains(':'),
+            !full_name.starts_with("rerun.archetypes.rerun.archetypes.")
+                && !full_name.contains(':'),
             "DEBUG ASSERT: Found archetype with full name {full_name:?}. Maybe some bad round-tripping?"
         );
     }
@@ -181,6 +188,16 @@ impl ArchetypeName {
             full_name
         }
     }
+
+    /// Url to the rerun docs for this Rerun archetype.
+    pub fn doc_url(&self) -> Option<String> {
+        // This code should be correct as long as this url passes our link checker:
+        // https://rerun.io/docs/reference/types/archetypes/line_strips3d
+        let short_name_pascal_case = self.full_name().strip_prefix("rerun.archetypes.")?;
+        let archetype_name_snake_case = re_case::to_snake_case(short_name_pascal_case);
+        let base_url = "https://rerun.io/docs/reference/types/archetypes";
+        Some(format!("{base_url}/{archetype_name_snake_case}"))
+    }
 }
 
 impl re_byte_size::SizeBytes for ArchetypeName {
@@ -193,12 +210,12 @@ impl re_byte_size::SizeBytes for ArchetypeName {
 // ---
 
 re_string_interner::declare_new_type!(
-    /// The name of an [`Archetype`]'s field, e.g. `positions`.
+    /// An identifier for a component, i.e. a field in an [`Archetype`].
     #[cfg_attr(feature = "serde", derive(::serde::Deserialize, ::serde::Serialize))]
-    pub struct ArchetypeFieldName;
+    pub struct ComponentIdentifier;
 );
 
-impl re_byte_size::SizeBytes for ArchetypeFieldName {
+impl re_byte_size::SizeBytes for ComponentIdentifier {
     #[inline]
     fn heap_size_bytes(&self) -> u64 {
         0
@@ -243,19 +260,10 @@ impl<A: Archetype> Default for GenericIndicatorComponent<A> {
     }
 }
 
-impl<A: Archetype> crate::LoggableBatch for GenericIndicatorComponent<A> {
+impl<A: Archetype> crate::ComponentBatch for GenericIndicatorComponent<A> {
     #[inline]
     fn to_arrow(&self) -> SerializationResult<arrow::array::ArrayRef> {
         Ok(Arc::new(arrow::array::NullArray::new(1)))
-    }
-}
-
-impl<A: Archetype> crate::ComponentBatch for GenericIndicatorComponent<A> {
-    #[inline]
-    fn descriptor(&self) -> Cow<'_, ComponentDescriptor> {
-        let component_name =
-            format!("{}Indicator", A::name().full_name()).replace("archetypes", "components");
-        ComponentDescriptor::new(component_name).into()
     }
 }
 
@@ -273,17 +281,10 @@ pub struct GenericIndicatorComponentArray<A: Archetype> {
     _phantom: std::marker::PhantomData<A>,
 }
 
-impl<A: Archetype> crate::LoggableBatch for GenericIndicatorComponentArray<A> {
+impl<A: Archetype> crate::ComponentBatch for GenericIndicatorComponentArray<A> {
     #[inline]
     fn to_arrow(&self) -> SerializationResult<arrow::array::ArrayRef> {
         Ok(Arc::new(arrow::array::NullArray::new(self.len)))
-    }
-}
-
-impl<A: Archetype> crate::ComponentBatch for GenericIndicatorComponentArray<A> {
-    #[inline]
-    fn descriptor(&self) -> Cow<'_, ComponentDescriptor> {
-        ComponentDescriptor::new(GenericIndicatorComponent::<A>::DEFAULT.name()).into()
     }
 }
 
@@ -293,18 +294,11 @@ impl<A: Archetype> crate::ComponentBatch for GenericIndicatorComponentArray<A> {
 ///
 /// [indicator component]: [`Archetype::Indicator`]
 #[derive(Debug, Clone, Copy)]
-pub struct NamedIndicatorComponent(pub ComponentName);
-
-impl crate::LoggableBatch for NamedIndicatorComponent {
-    #[inline]
-    fn to_arrow(&self) -> SerializationResult<arrow::array::ArrayRef> {
-        Ok(Arc::new(arrow::array::NullArray::new(1)))
-    }
-}
+pub struct NamedIndicatorComponent(pub ComponentType);
 
 impl crate::ComponentBatch for NamedIndicatorComponent {
     #[inline]
-    fn descriptor(&self) -> Cow<'_, ComponentDescriptor> {
-        ComponentDescriptor::new(self.0).into()
+    fn to_arrow(&self) -> SerializationResult<arrow::array::ArrayRef> {
+        Ok(Arc::new(arrow::array::NullArray::new(1)))
     }
 }

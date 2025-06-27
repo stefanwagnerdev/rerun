@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Sequence
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 
@@ -19,20 +20,20 @@ class ComponentColumnSelectorExt:
         *,
         entity_path: datatypes.EntityPathLike | None = None,
         component: datatypes.Utf8Like | None = None,
-    ):
+    ) -> None:
         """
         Create a new instance of the ComponentColumnSelector datatype.
 
         Parameters
         ----------
         spec:
-            A string in the format "/entity/path:ComponentName". If used, `entity_path` and `component` must be `None`.
+            A string in the format "/entity/path:Component". If used, `entity_path` and `component` must be `None`.
 
         entity_path:
             The column's entity path. If used, `spec` must be `None` and `component` must be provided.
 
         component:
-            The column's component name. If used, `spec` must be `None` and `entity_path` must be provided.
+            The column's component type. If used, `spec` must be `None` and `entity_path` must be provided.
 
         """
 
@@ -65,8 +66,8 @@ class ComponentColumnSelectorExt:
 
         return pa.StructArray.from_arrays(
             [
-                EntityPathBatch([x.entity_path for x in data]).as_arrow_array(),  # type: ignore[misc, arg-type]
-                Utf8Batch([x.component for x in data]).as_arrow_array(),  # type: ignore[misc, arg-type]
+                EntityPathBatch([x.entity_path for x in data]).as_arrow_array(),
+                Utf8Batch([x.component for x in data]).as_arrow_array(),
             ],
             fields=list(data_type),
         )

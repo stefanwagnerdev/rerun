@@ -19,6 +19,9 @@
 
 namespace rerun::blueprint::archetypes {
     /// **Archetype**: Configures how tensor scalars are mapped to color.
+    ///
+    /// ⚠ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    ///
     struct TensorScalarMapping {
         /// Filter used when zooming in on the tensor.
         ///
@@ -38,29 +41,29 @@ namespace rerun::blueprint::archetypes {
         std::optional<ComponentBatch> gamma;
 
       public:
-        static constexpr const char IndicatorComponentName[] =
+        static constexpr const char IndicatorComponentType[] =
             "rerun.blueprint.components.TensorScalarMappingIndicator";
 
         /// Indicator component, used to identify the archetype when converting to a list of components.
-        using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentName>;
+        using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentType>;
         /// The name of the archetype as used in `ComponentDescriptor`s.
         static constexpr const char ArchetypeName[] =
             "rerun.blueprint.archetypes.TensorScalarMapping";
 
         /// `ComponentDescriptor` for the `mag_filter` field.
         static constexpr auto Descriptor_mag_filter = ComponentDescriptor(
-            ArchetypeName, "mag_filter",
-            Loggable<rerun::components::MagnificationFilter>::Descriptor.component_name
+            ArchetypeName, "TensorScalarMapping:mag_filter",
+            Loggable<rerun::components::MagnificationFilter>::ComponentType
         );
         /// `ComponentDescriptor` for the `colormap` field.
         static constexpr auto Descriptor_colormap = ComponentDescriptor(
-            ArchetypeName, "colormap",
-            Loggable<rerun::components::Colormap>::Descriptor.component_name
+            ArchetypeName, "TensorScalarMapping:colormap",
+            Loggable<rerun::components::Colormap>::ComponentType
         );
         /// `ComponentDescriptor` for the `gamma` field.
         static constexpr auto Descriptor_gamma = ComponentDescriptor(
-            ArchetypeName, "gamma",
-            Loggable<rerun::components::GammaCorrection>::Descriptor.component_name
+            ArchetypeName, "TensorScalarMapping:gamma",
+            Loggable<rerun::components::GammaCorrection>::ComponentType
         );
 
       public:

@@ -44,7 +44,7 @@ def run_realsense(num_frames: int | None) -> None:
         rr.Transform3D(
             translation=rgb_from_depth.translation,
             mat3x3=np.reshape(rgb_from_depth.rotation, (3, 3)),
-            from_parent=True,
+            relation=rr.TransformRelation.ChildFromParent,
         ),
         static=True,
     )
@@ -69,11 +69,11 @@ def run_realsense(num_frames: int | None) -> None:
             if num_frames and frame_nr >= num_frames:
                 break
 
-            rr.set_time_sequence("frame_nr", frame_nr)
+            rr.set_time("frame_nr", sequence=frame_nr)
             frame_nr += 1
 
             frames = pipe.wait_for_frames()
-            for f in frames:
+            for _f in frames:
                 # Log the depth frame
                 depth_frame = frames.get_depth_frame()
                 depth_units = depth_frame.get_units()

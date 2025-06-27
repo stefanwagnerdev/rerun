@@ -9,15 +9,14 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use re_chunk::{Chunk, RowId};
 use re_log_types::{
-    entity_path,
-    example_components::{MyColor, MyPoint},
-    LogMsg, StoreId, StoreKind, TimeInt, TimeType, Timeline,
+    LogMsg, StoreId, StoreKind, TimeInt, TimeType, Timeline, entity_path,
+    example_components::{MyColor, MyPoint, MyPoints},
 };
 
 use re_log_encoding::EncodingOptions;
 const PROTOBUF_COMPRESSED: EncodingOptions = EncodingOptions::PROTOBUF_COMPRESSED;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 #[cfg(not(debug_assertions))]
 const NUM_POINTS: usize = 10_000;
@@ -51,8 +50,7 @@ fn encode_log_msgs(
 }
 
 fn decode_log_msgs(mut bytes: &[u8]) -> Vec<LogMsg> {
-    let version_policy = re_log_encoding::VersionPolicy::Error;
-    let messages = re_log_encoding::decoder::Decoder::new(version_policy, &mut bytes)
+    let messages = re_log_encoding::decoder::Decoder::new(&mut bytes)
         .unwrap()
         .collect::<Result<Vec<LogMsg>, _>>()
         .unwrap();
@@ -89,8 +87,14 @@ fn mono_points_arrow(c: &mut Criterion) {
                         RowId::ZERO,
                         [build_frame_nr(TimeInt::ZERO)],
                         [
-                            &MyPoint::from_iter(0..1) as _,
-                            &MyColor::from_iter(0..1) as _,
+                            (
+                                MyPoints::descriptor_points(),
+                                &MyPoint::from_iter(0..1) as _,
+                            ),
+                            (
+                                MyPoints::descriptor_colors(),
+                                &MyColor::from_iter(0..1) as _,
+                            ),
                         ],
                     )
                     .build()
@@ -154,8 +158,14 @@ fn mono_points_arrow_batched(c: &mut Criterion) {
                 RowId::ZERO,
                 [build_frame_nr(TimeInt::ZERO)],
                 [
-                    &MyPoint::from_iter(0..1) as _,
-                    &MyColor::from_iter(0..1) as _,
+                    (
+                        MyPoints::descriptor_points(),
+                        &MyPoint::from_iter(0..1) as _,
+                    ),
+                    (
+                        MyPoints::descriptor_colors(),
+                        &MyColor::from_iter(0..1) as _,
+                    ),
                 ],
             );
         }
@@ -211,17 +221,25 @@ fn mono_points_arrow_batched(c: &mut Criterion) {
 
 fn batch_points_arrow(c: &mut Criterion) {
     fn generate_chunks() -> Vec<Chunk> {
-        vec![Chunk::builder(entity_path!("points"))
-            .with_component_batches(
-                RowId::ZERO,
-                [build_frame_nr(TimeInt::ZERO)],
-                [
-                    &MyPoint::from_iter(0..NUM_POINTS as u32) as _,
-                    &MyColor::from_iter(0..NUM_POINTS as u32) as _,
-                ],
-            )
-            .build()
-            .unwrap()]
+        vec![
+            Chunk::builder(entity_path!("points"))
+                .with_component_batches(
+                    RowId::ZERO,
+                    [build_frame_nr(TimeInt::ZERO)],
+                    [
+                        (
+                            MyPoints::descriptor_points(),
+                            &MyPoint::from_iter(0..NUM_POINTS as u32) as _,
+                        ),
+                        (
+                            MyPoints::descriptor_colors(),
+                            &MyColor::from_iter(0..NUM_POINTS as u32) as _,
+                        ),
+                    ],
+                )
+                .build()
+                .unwrap(),
+        ]
     }
 
     {

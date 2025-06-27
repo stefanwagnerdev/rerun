@@ -5,22 +5,23 @@ use std::{collections::HashSet, fmt::Formatter, fs, sync::Arc};
 use arrow::array::ArrayRef;
 use egui::Vec2;
 use egui_kittest::{SnapshotError, SnapshotOptions};
-use itertools::Itertools;
+use itertools::Itertools as _;
 use nohash_hasher::IntSet;
 
 use re_component_ui::create_component_ui_registry;
 use re_log_types::{EntityPath, TimelineName};
 use re_types::{
+    ComponentDescriptor,
     blueprint::components::{ComponentColumnSelector, QueryExpression},
     components::{self, GraphEdge, GraphNode, ImageFormat, Text},
     datatypes::{ChannelDatatype, PixelFormat},
 };
-use re_types_core::{reflection::Reflection, Component, ComponentName, LoggableBatch};
-use re_ui::{list_item, UiExt};
+use re_types_core::{Component, ComponentBatch, ComponentType, reflection::Reflection};
+use re_ui::{UiExt as _, list_item};
 use re_viewer_context::{
-    external::re_chunk_store::{external::re_chunk, LatestAtQuery},
-    test_context::TestContext,
     UiLayout, ViewerContext,
+    external::re_chunk_store::{LatestAtQuery, external::re_chunk},
+    test_context::TestContext,
 };
 
 /// Test case master list.
@@ -37,7 +38,7 @@ fn test_cases(reflection: &Reflection) -> Vec<TestCase> {
         TestCase::from_component(
             ComponentColumnSelector::new(
                 &EntityPath::from("/world"),
-                "rerun.components.Position3D",
+                "rerun.components.Position3D".to_owned(),
             ),
             "simple",
         ),
@@ -64,7 +65,7 @@ fn test_cases(reflection: &Reflection) -> Vec<TestCase> {
         TestCase::from_component(QueryExpression::from("+ /world/**"), "simple"),
         TestCase::from_component(Text::from("Hello World!"), "simple"),
         TestCase::from_arrow(
-            ComponentName::from("any_value"),
+            ComponentType::from("any_value"),
             arrow::array::ListArray::new(
                 arrow::datatypes::Field::new("item", arrow::datatypes::DataType::Float64, false)
                     .into(),
@@ -75,34 +76,34 @@ fn test_cases(reflection: &Reflection) -> Vec<TestCase> {
             "any_value_f64",
         ),
         TestCase::from_arrow(
-            ComponentName::from("custom_string"),
+            ComponentType::from("custom_string"),
             arrow::array::StringArray::from(vec!["Hello World!"]),
             "any_value_string",
         ),
         TestCase::from_arrow(
-            ComponentName::from("custom_url_string"),
+            ComponentType::from("custom_url_string"),
             arrow::array::StringArray::from(vec!["https://rerun.io"]),
             "any_value_url_string",
         ),
         //TODO(ab): this will look like the previous test case, but we eventually would like to have
         // a specific icon for it, so we already have a test case for it :)
         TestCase::from_arrow(
-            ComponentName::from("custom_catalog_string"),
+            ComponentType::from("custom_catalog_string"),
             arrow::array::StringArray::from(vec!["rerun://rerun.io:1234/catalog"]),
             "any_value_url_string",
         ),
         TestCase::from_arrow(
-            ComponentName::from("custom_empty_array"),
+            ComponentType::from("custom_empty_array"),
             arrow::array::UInt8Array::from(vec![] as Vec<u8>),
             "any_value_empty_array",
         ),
         TestCase::from_arrow(
-            ComponentName::from("custom_small_array"),
+            ComponentType::from("custom_small_array"),
             arrow::array::UInt8Array::from(vec![42; 10]),
             "any_value_small_array",
         ),
         TestCase::from_arrow(
-            ComponentName::from("custom_large_blob"),
+            ComponentType::from("custom_large_blob"),
             arrow::array::UInt8Array::from(vec![42; 3001]),
             "any_value_large_blob",
         ),
@@ -135,14 +136,14 @@ fn test_cases(reflection: &Reflection) -> Vec<TestCase> {
         re_types::blueprint::components::ViewMaximized::name(),
         re_types::blueprint::components::ViewOrigin::name(),
         re_types::blueprint::components::ViewerRecommendationHash::name(),
-        re_types::blueprint::components::VisualizerOverrides::name(),
+        re_types::blueprint::components::VisualizerOverride::name(),
     ]
     .into_iter()
     // Exclude components that have custom test cases.
     .chain(
         custom_test_cases
             .iter()
-            .map(|test_case| test_case.component_name),
+            .map(|test_case| test_case.component_type),
     )
     .collect::<IntSet<_>>();
 
@@ -153,12 +154,12 @@ fn test_cases(reflection: &Reflection) -> Vec<TestCase> {
     let placeholder_test_cases = reflection
         .components
         .keys()
-        .filter(|component_name| !excluded_components.contains(*component_name))
-        .map(|&component_name| {
-            let component_data = placeholder_for_component(reflection, component_name).unwrap();
+        .filter(|component_type| !excluded_components.contains(*component_type))
+        .map(|&component_type| {
+            let component_data = placeholder_for_component(reflection, component_type).unwrap();
             TestCase {
                 label: "placeholder",
-                component_name,
+                component_type,
                 component_data,
             }
         });
@@ -166,9 +167,9 @@ fn test_cases(reflection: &Reflection) -> Vec<TestCase> {
     placeholder_test_cases
         .chain(custom_test_cases)
         .sorted_by(|left, right| {
-            left.component_name
+            left.component_type
                 .short_name()
-                .cmp(right.component_name.short_name())
+                .cmp(right.component_type.short_name())
                 .then_with(|| left.label.cmp(right.label))
         })
         .collect_vec()
@@ -233,7 +234,7 @@ fn test_single_component_ui_as_list_item(
     let actual_ui = |ctx: &ViewerContext<'_>, ui: &mut egui::Ui| {
         ui.list_item_flat_noninteractive(
             list_item::PropertyContent::new("ComponentName").value_fn(|ui, _| {
-                ctx.component_ui_registry().ui_raw(
+                ctx.component_ui_registry().component_ui_raw(
                     ctx,
                     ui,
                     UiLayout::List,
@@ -242,7 +243,13 @@ fn test_single_component_ui_as_list_item(
                     &LatestAtQuery::latest(TimelineName::log_time()),
                     ctx.recording(),
                     &EntityPath::root(),
-                    test_case.component_name,
+                    // As of writing, `ComponentDescriptor` the descriptor part is only used for
+                    // caching and actual lookup of uis is only done via `ComponentType`.
+                    &ComponentDescriptor {
+                        component: test_case.label.into(),
+                        archetype: None,
+                        component_type: Some(test_case.component_type),
+                    },
                     None,
                     &*test_case.component_data,
                 );
@@ -277,7 +284,7 @@ struct TestCase {
     label: &'static str,
 
     /// The component this test case refers to.
-    component_name: ComponentName,
+    component_type: ComponentType,
 
     /// The data for that component.
     component_data: ArrayRef,
@@ -285,30 +292,30 @@ struct TestCase {
 
 impl std::fmt::Display for TestCase {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}_{}", self.component_name.short_name(), self.label)
+        write!(f, "{}_{}", self.component_type.short_name(), self.label)
     }
 }
 
 impl TestCase {
     #[allow(clippy::needless_pass_by_value)]
     fn from_component<C: Component>(component: C, label: &'static str) -> Self {
-        let component_name = C::name();
-        let component_data = LoggableBatch::to_arrow(&component).unwrap();
+        let component_type = C::name();
+        let component_data = ComponentBatch::to_arrow(&component).unwrap();
         Self {
             label,
-            component_name,
+            component_type,
             component_data,
         }
     }
 
     fn from_arrow(
-        component_name: ComponentName,
+        component_type: ComponentType,
         component_data: impl arrow::array::Array + 'static,
         label: &'static str,
     ) -> Self {
         Self {
             label,
-            component_name,
+            component_type,
             component_data: Arc::new(component_data),
         }
     }
@@ -348,9 +355,9 @@ fn check_for_unused_snapshots(test_cases: &[TestCase], snapshot_options: &Snapsh
 
 /// Pretty prints a list of test cases with the OK/NOK result and panics if any of the tests failed.
 fn check_and_print_results(test_cases: &[TestCase], results: &[Result<(), SnapshotError>]) {
-    let component_name_width = test_cases
+    let component_type_width = test_cases
         .iter()
-        .map(|test_case| test_case.component_name.short_name().len())
+        .map(|test_case| test_case.component_type.short_name().len())
         .max()
         .unwrap();
 
@@ -363,13 +370,13 @@ fn check_and_print_results(test_cases: &[TestCase], results: &[Result<(), Snapsh
     for (test_case, result) in test_cases.iter().zip(results.iter()) {
         match result {
             Ok(_) => println!(
-                "{:>component_name_width$}[{:label_width$}] OK",
-                test_case.component_name.short_name(),
+                "{:>component_type_width$}[{:label_width$}] OK",
+                test_case.component_type.short_name(),
                 test_case.label,
             ),
             Err(err) => println!(
-                "{:>component_name_width$}[{:label_width$}] ERR {}",
-                test_case.component_name.short_name(),
+                "{:>component_type_width$}[{:label_width$}] ERR {}",
+                test_case.component_type.short_name(),
                 test_case.label,
                 err,
             ),
@@ -398,7 +405,7 @@ fn get_test_context() -> TestContext {
 /// fine as we only test built-in components here.
 fn placeholder_for_component(
     reflection: &Reflection,
-    component: re_chunk::ComponentName,
+    component: re_chunk::ComponentType,
 ) -> Option<ArrayRef> {
     let datatype = if let Some(reflection) = reflection.components.get(&component) {
         if let Some(placeholder) = reflection.custom_placeholder.as_ref() {

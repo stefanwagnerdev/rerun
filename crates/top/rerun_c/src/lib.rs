@@ -12,23 +12,26 @@ mod ptr;
 mod recording_streams;
 mod video;
 
-use std::ffi::{c_char, c_uchar, CString};
+use std::ffi::{CString, c_char, c_float, c_uchar};
 
-use arrow::array::{ArrayRef as ArrowArrayRef, ListArray as ArrowListArray};
+use arrow::{
+    array::{ArrayRef as ArrowArrayRef, ListArray as ArrowListArray},
+    ffi::{FFI_ArrowArray, FFI_ArrowSchema},
+};
 use arrow_utils::arrow_array_from_c_ffi;
 use once_cell::sync::Lazy;
 
 use re_arrow_util::ArrowArrayDowncastRef as _;
 use re_sdk::{
+    ComponentDescriptor, EntityPath, RecordingStream, RecordingStreamBuilder, StoreKind, TimeCell,
+    TimePoint, Timeline,
     external::{nohash_hasher::IntMap, re_log_types::TimelineName},
     log::{Chunk, ChunkId, PendingRow, TimeColumn},
     time::TimeType,
-    ComponentDescriptor, EntityPath, RecordingStream, RecordingStreamBuilder, StoreKind, TimePoint,
-    Timeline,
 };
 
 use component_type_registry::COMPONENT_TYPES;
-use recording_streams::{recording_stream, RECORDING_STREAMS};
+use recording_streams::{RECORDING_STREAMS, recording_stream};
 
 // ----------------------------------------------------------------------------
 // Types:
@@ -95,7 +98,9 @@ pub const RR_COMPONENT_TYPE_HANDLE_INVALID: CComponentTypeHandle = 0xFFFFFFFF;
 pub struct CSpawnOptions {
     pub port: u16,
     pub memory_limit: CStringView,
+    pub server_memory_limit: CStringView,
     pub hide_welcome_screen: bool,
+    pub detach_process: bool,
     pub executable_name: CStringView,
     pub executable_path: CStringView,
 }
@@ -103,27 +108,44 @@ pub struct CSpawnOptions {
 impl CSpawnOptions {
     #[allow(clippy::result_large_err)]
     pub fn as_rust(&self) -> Result<re_sdk::SpawnOptions, CError> {
+        let Self {
+            port,
+            memory_limit,
+            server_memory_limit,
+            hide_welcome_screen,
+            detach_process,
+            executable_name,
+            executable_path,
+        } = self;
+
         let mut spawn_opts = re_sdk::SpawnOptions::default();
 
-        if self.port != 0 {
-            spawn_opts.port = self.port;
+        if *port != 0 {
+            spawn_opts.port = *port;
         }
 
         spawn_opts.wait_for_bind = true;
 
-        if !self.memory_limit.is_empty() {
-            spawn_opts.memory_limit = self.memory_limit.as_str("memory_limit")?.to_owned();
+        if !memory_limit.is_empty() {
+            spawn_opts.memory_limit = memory_limit.as_str("memory_limit")?.to_owned();
+        }
+        if !server_memory_limit.is_empty() {
+            spawn_opts.server_memory_limit = self
+                .server_memory_limit
+                .as_str("server_memory_limit")?
+                .to_owned();
         }
 
-        spawn_opts.hide_welcome_screen = self.hide_welcome_screen;
+        spawn_opts.hide_welcome_screen = *hide_welcome_screen;
+        spawn_opts.detach_process = *detach_process;
 
-        if !self.executable_name.is_empty() {
-            spawn_opts.executable_name = self.executable_name.as_str("executable_name")?.to_owned();
+        if !executable_name.is_empty() {
+            spawn_opts.executable_name = executable_name.as_str("executable_name")?.to_owned();
         }
 
-        if !self.executable_path.is_empty() {
+        if !executable_path.is_empty() {
             spawn_opts.executable_path =
-                Some(self.executable_path.as_str("executable_path")?.to_owned());
+                Some(executable_path.as_str("executable_path")?.to_owned());
         }
 
         Ok(spawn_opts)
@@ -168,22 +190,22 @@ pub struct CStoreInfo {
 #[repr(C)]
 pub struct CComponentDescriptor {
     pub archetype_name: CStringView,
-    pub archetype_field_name: CStringView,
-    pub component_name: CStringView,
+    pub component: CStringView,
+    pub component_type: CStringView,
 }
 
 /// See `rr_component_type` in the C header.
 #[repr(C)]
 pub struct CComponentType {
     pub descriptor: CComponentDescriptor,
-    pub schema: arrow2::ffi::ArrowSchema,
+    pub schema: FFI_ArrowSchema,
 }
 
 /// See `rr_component_batch` in the C header.
 #[repr(C)]
 pub struct CComponentBatch {
     pub component_type: CComponentTypeHandle,
-    pub array: arrow2::ffi::ArrowArray,
+    pub array: FFI_ArrowArray,
 }
 
 #[repr(C)]
@@ -199,7 +221,7 @@ pub struct CComponentColumns {
     pub component_type: CComponentTypeHandle,
 
     /// A `ListArray` with the datatype `List(component_type)`.
-    pub array: arrow2::ffi::ArrowArray,
+    pub array: FFI_ArrowArray,
 }
 
 /// See `rr_sorting_status` in the C header.
@@ -226,11 +248,14 @@ impl CSortingStatus {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy)]
 pub enum CTimeType {
-    /// Normal wall time.
-    Time = 0,
-
     /// Used e.g. for frames in a film.
     Sequence = 1,
+
+    /// Nanoseconds.
+    Duration = 2,
+
+    /// Nanoseconds since Unix epoch (1970-01-01 00:00:00 UTC).
+    Timestamp = 3,
 }
 
 /// See `rr_timeline` in the C header.
@@ -251,8 +276,9 @@ impl TryFrom<CTimeline> for Timeline {
     fn try_from(timeline: CTimeline) -> Result<Self, CError> {
         let name = timeline.name.as_str("timeline.name")?;
         let typ = match timeline.typ {
-            CTimeType::Time => TimeType::Time,
             CTimeType::Sequence => TimeType::Sequence,
+            CTimeType::Duration => TimeType::DurationNs,
+            CTimeType::Timestamp => TimeType::TimestampNs,
         };
         Ok(Self::new(name, typ))
     }
@@ -265,10 +291,52 @@ pub struct CTimeColumn {
     pub timeline: CTimeline,
 
     /// Times, a primitive array of i64.
-    pub times: arrow2::ffi::ArrowArray,
+    pub times: FFI_ArrowArray,
 
     /// The sorting order of the times array.
     pub sorting_status: CSortingStatus,
+}
+
+/// Log sink which streams messages to a gRPC server.
+///
+/// The behavior of this sink is the same as the one set by `rr_recording_stream_connect_grpc`.
+///
+/// See `rr_grpc_sink` in the C header.
+#[repr(C)]
+pub struct CGrpcSink {
+    /// A Rerun gRPC URL
+    ///
+    /// Default is `rerun+http://127.0.0.1:9876/proxy`.
+    pub url: CStringView,
+
+    /// The minimum time the SDK will wait during a flush before potentially
+    /// dropping data if progress is not being made. Passing a negative value indicates no timeout,
+    /// and can cause a call to `flush` to block indefinitely.
+    pub flush_timeout_sec: c_float,
+}
+
+/// Log sink which writes messages to a file.
+///
+/// See `rr_file_sink` in the C header.
+#[repr(C)]
+pub struct CFileSink {
+    /// Path to the output file.
+    pub path: CStringView,
+}
+
+/// A sink for log messages.
+///
+/// See specific log sink types for more information:
+/// * [`CGrpcSink`]
+/// * [`CFileSink`]
+///
+/// See `rr_log_sink` and `RR_LOG_SINK_KIND` enum values in the C header.
+///
+/// Layout is defined in [the Rust reference](https://doc.rust-lang.org/stable/reference/type-layout.html#reprc-enums-with-fields).
+#[repr(C, u8)]
+pub enum CLogSink {
+    GrpcSink { grpc: CGrpcSink } = 0,
+    FileSink { file: CFileSink } = 1,
 }
 
 #[repr(u32)]
@@ -284,6 +352,7 @@ pub enum CErrorCode {
     InvalidSocketAddress,
     InvalidComponentTypeHandle,
     InvalidServerUrl = 0x0000_0001a,
+    InvalidMemoryLimit,
 
     _CategoryRecordingStream = 0x0000_00100,
     RecordingStreamRuntimeFailure,
@@ -292,6 +361,7 @@ pub enum CErrorCode {
     RecordingStreamStdoutFailure,
     RecordingStreamSpawnFailure,
     RecordingStreamChunkValidationFailure,
+    RecordingStreamServeGrpcFailure,
 
     _CategoryArrow = 0x0000_1000,
     ArrowFfiSchemaImportError,
@@ -316,7 +386,7 @@ pub struct CError {
 // SAFETY: the unsafety comes from #[no_mangle], because we can declare multiple
 // functions with the same symbol names, and the linker behavior in this case i undefined.
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rr_version_string() -> *const c_char {
     static VERSION: Lazy<CString> = Lazy::new(|| {
         CString::new(re_sdk::build_info().version.to_string()).expect("CString::new failed")
@@ -341,7 +411,7 @@ fn rr_spawn_impl(spawn_opts: *const CSpawnOptions) -> Result<(), CError> {
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rr_spawn(spawn_opts: *const CSpawnOptions, error: *mut CError) {
     if let Err(err) = rr_spawn_impl(spawn_opts) {
         err.write_error(error);
@@ -355,8 +425,8 @@ fn rr_register_component_type_impl(
 ) -> Result<CComponentTypeHandle, CError> {
     let CComponentDescriptor {
         archetype_name,
-        archetype_field_name,
-        component_name,
+        component,
+        component_type: component_type_descr,
     } = &component_type.descriptor;
 
     let archetype_name = if !archetype_name.is_null() {
@@ -364,36 +434,35 @@ fn rr_register_component_type_impl(
     } else {
         None
     };
-    let archetype_field_name = if !archetype_field_name.is_null() {
-        Some(archetype_field_name.as_str("component_type.descriptor.archetype_field_name")?)
+    let component = component.as_str("component_type.descriptor.component")?;
+    let component_type_descr = if !component_type_descr.is_null() {
+        Some(component_type_descr.as_str("component_type.descriptor.component_type")?)
     } else {
         None
     };
-    let component_name = component_name.as_str("component_type.descriptor.component_name")?;
 
     let component_descr = ComponentDescriptor {
-        archetype_name: archetype_name.map(Into::into),
-        archetype_field_name: archetype_field_name.map(Into::into),
-        component_name: component_name.into(),
+        archetype: archetype_name.map(Into::into),
+        component: component.into(),
+        component_type: component_type_descr.map(Into::into),
     };
 
-    let schema =
-        unsafe { arrow2::ffi::import_field_from_c(&component_type.schema) }.map_err(|err| {
-            CError::new(
-                CErrorCode::ArrowFfiSchemaImportError,
-                &format!("Failed to import ffi schema: {err}"),
-            )
-        })?;
+    let field = arrow::datatypes::Field::try_from(&component_type.schema).map_err(|err| {
+        CError::new(
+            CErrorCode::ArrowFfiSchemaImportError,
+            &format!("Failed to import ffi schema: {err}"),
+        )
+    })?;
 
     Ok(COMPONENT_TYPES
         .write()
-        .register(component_descr, schema.data_type))
+        .register(component_descr, field.data_type().clone()))
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rr_register_component_type(
-    // Note that since this is passed by value, Arrow2 will release the schema on drop!
+    // Note that since this is passed by value, arrow will release the schema on drop!
     component_type: CComponentType,
     error: *mut CError,
 ) -> u32 {
@@ -424,7 +493,6 @@ fn rr_recording_stream_new_impl(
     let application_id = application_id.as_str("store_info.application_id")?;
 
     let mut rec_builder = RecordingStreamBuilder::new(application_id)
-        //.is_official_example(is_official_example) // TODO(andreas): Is there a meaningful way to expose this?
         //.store_id(recording_id.clone()) // TODO(andreas): Expose store id.
         .store_source(re_sdk::external::re_log_types::StoreSource::CSdk)
         .default_enabled(default_enabled);
@@ -449,7 +517,7 @@ fn rr_recording_stream_new_impl(
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rr_recording_stream_new(
     store_info: *const CStoreInfo,
     default_enabled: bool,
@@ -499,11 +567,14 @@ thread_local! {
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rr_recording_stream_free(id: CRecordingStream) {
     if THREAD_LIFE_TRACKER.try_with(|_v| {}).is_ok() {
         if let Some(stream) = RECORDING_STREAMS.lock().remove(id) {
-            stream.disconnect();
+            // Before we called `stream.disconnect()` here`, which unnecessarily replaced the current sink with a
+            // buffered sink that would be immediately dropped afterwards. Not only did this cause spam in the
+            // log outputs, it also lead to race conditions upon (log) application shutdown.
+            drop(stream);
         }
     } else {
         // Yes, at least as of writing we can still log things in this state!
@@ -514,14 +585,14 @@ pub extern "C" fn rr_recording_stream_free(id: CRecordingStream) {
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rr_recording_stream_set_global(id: CRecordingStream, store_kind: CStoreKind) {
     let stream = RECORDING_STREAMS.lock().get(id);
     RecordingStream::set_global(store_kind.into(), stream);
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rr_recording_stream_set_thread_local(
     id: CRecordingStream,
     store_kind: CStoreKind,
@@ -531,7 +602,7 @@ pub extern "C" fn rr_recording_stream_set_thread_local(
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rr_recording_stream_is_enabled(
     stream: CRecordingStream,
     error: *mut CError,
@@ -551,51 +622,68 @@ fn rr_recording_stream_is_enabled_impl(id: CRecordingStream) -> Result<bool, CEr
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rr_recording_stream_flush_blocking(id: CRecordingStream) {
     if let Some(stream) = RECORDING_STREAMS.lock().remove(id) {
         stream.flush_blocking();
     }
 }
 
+#[allow(unsafe_code)]
 #[allow(clippy::result_large_err)]
-fn rr_recording_stream_connect_impl(
+fn rr_recording_stream_set_sinks_impl(
     stream: CRecordingStream,
-    tcp_addr: CStringView,
-    flush_timeout_sec: f32,
+    raw_sinks: *mut CLogSink,
+    num_sinks: u32,
 ) -> Result<(), CError> {
     let stream = recording_stream(stream)?;
 
-    let tcp_addr = tcp_addr.as_str("tcp_addr")?;
-    let tcp_addr: std::net::SocketAddr = tcp_addr.parse().map_err(|err| {
-        CError::new(
-            CErrorCode::InvalidSocketAddress,
-            &format!("Failed to parse tcp address {tcp_addr:?}: {err}"),
-        )
-    })?;
+    let raw_sinks = unsafe { std::slice::from_raw_parts_mut(raw_sinks, num_sinks as usize) };
 
-    let flush_timeout = if flush_timeout_sec >= 0.0 {
-        Some(std::time::Duration::from_secs_f32(flush_timeout_sec))
-    } else {
-        None
-    };
+    let mut sinks: Vec<Box<dyn re_sdk::sink::LogSink>> = Vec::with_capacity(num_sinks as usize);
+    for sink in raw_sinks {
+        match sink {
+            CLogSink::GrpcSink { grpc } => {
+                let uri = grpc
+                    .url
+                    .as_str("url")?
+                    .parse::<re_sdk::external::re_uri::ProxyUri>()
+                    .map_err(|err| CError::new(CErrorCode::InvalidServerUrl, &err.to_string()))?;
+                let flush_timeout = if grpc.flush_timeout_sec >= 0.0 {
+                    Some(std::time::Duration::from_secs_f32(grpc.flush_timeout_sec))
+                } else {
+                    None
+                };
+                sinks.push(Box::new(re_sdk::sink::GrpcSink::new(uri, flush_timeout)));
+            }
+            CLogSink::FileSink { file } => {
+                let path = file.path.as_str("path")?;
+                sinks.push(Box::new(re_sdk::sink::FileSink::new(path).map_err(
+                    |err| {
+                        CError::new(
+                            CErrorCode::RecordingStreamSaveFailure,
+                            &format!("Failed to save recording stream to {path:?}: {err}"),
+                        )
+                    },
+                )?));
+            }
+        }
+    }
 
-    stream
-        .connect_grpc_opts(format!("rerun+http://{tcp_addr}/proxy"), flush_timeout)
-        .map_err(|err| CError::new(CErrorCode::InvalidServerUrl, &err.to_string()))?;
+    stream.set_sinks(sinks);
 
     Ok(())
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
-pub extern "C" fn rr_recording_stream_connect(
+#[unsafe(no_mangle)]
+pub extern "C" fn rr_recording_stream_set_sinks(
     id: CRecordingStream,
-    tcp_addr: CStringView,
-    flush_timeout_sec: f32,
+    sinks: *mut CLogSink,
+    num_sinks: u32,
     error: *mut CError,
 ) {
-    if let Err(err) = rr_recording_stream_connect_impl(id, tcp_addr, flush_timeout_sec) {
+    if let Err(err) = rr_recording_stream_set_sinks_impl(id, sinks, num_sinks) {
         err.write_error(error);
     }
 }
@@ -623,7 +711,7 @@ fn rr_recording_stream_connect_grpc_impl(
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rr_recording_stream_connect_grpc(
     id: CRecordingStream,
     url: CStringView,
@@ -631,6 +719,47 @@ pub extern "C" fn rr_recording_stream_connect_grpc(
     error: *mut CError,
 ) {
     if let Err(err) = rr_recording_stream_connect_grpc_impl(id, url, flush_timeout_sec) {
+        err.write_error(error);
+    }
+}
+
+#[allow(clippy::result_large_err)]
+fn rr_recording_stream_serve_grpc_impl(
+    stream: CRecordingStream,
+    bind_ip: CStringView,
+    port: u16,
+    server_memory_limit: CStringView,
+) -> Result<(), CError> {
+    let stream = recording_stream(stream)?;
+
+    let bind_ip = bind_ip.as_str("bind_ip")?;
+    let server_memory_limit = server_memory_limit
+        .as_str("server_memory_limit")?
+        .parse::<re_sdk::MemoryLimit>()
+        .map_err(|err| CError::new(CErrorCode::InvalidMemoryLimit, &err))?;
+
+    stream
+        .serve_grpc_opts(bind_ip, port, server_memory_limit)
+        .map_err(|err| {
+            CError::new(
+                CErrorCode::RecordingStreamServeGrpcFailure,
+                &err.to_string(),
+            )
+        })?;
+
+    Ok(())
+}
+
+#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
+pub extern "C" fn rr_recording_stream_serve_grpc(
+    id: CRecordingStream,
+    bind_ip: CStringView,
+    port: u16,
+    server_memory_limit: CStringView,
+    error: *mut CError,
+) {
+    if let Err(err) = rr_recording_stream_serve_grpc_impl(id, bind_ip, port, server_memory_limit) {
         err.write_error(error);
     }
 }
@@ -663,7 +792,7 @@ fn rr_recording_stream_spawn_impl(
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rr_recording_stream_spawn(
     id: CRecordingStream,
     spawn_opts: *const CSpawnOptions,
@@ -690,7 +819,7 @@ fn rr_recording_stream_save_impl(
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rr_recording_stream_save(
     id: CRecordingStream,
     path: CStringView,
@@ -712,7 +841,7 @@ fn rr_recording_stream_stdout_impl(stream: CRecordingStream) -> Result<(), CErro
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rr_recording_stream_stdout(id: CRecordingStream, error: *mut CError) {
     if let Err(err) = rr_recording_stream_stdout_impl(id) {
         err.write_error(error);
@@ -720,73 +849,33 @@ pub extern "C" fn rr_recording_stream_stdout(id: CRecordingStream, error: *mut C
 }
 
 #[allow(clippy::result_large_err)]
-fn rr_recording_stream_set_time_sequence_impl(
+fn rr_recording_stream_set_time_impl(
     stream: CRecordingStream,
     timeline_name: CStringView,
-    sequence: i64,
+    time_type: CTimeType,
+    value: i64,
 ) -> Result<(), CError> {
     let timeline = timeline_name.as_str("timeline_name")?;
-    recording_stream(stream)?.set_time_sequence(timeline, sequence);
+    let stream = recording_stream(stream)?;
+    let time_type = match time_type {
+        CTimeType::Sequence => TimeType::Sequence,
+        CTimeType::Duration => TimeType::DurationNs,
+        CTimeType::Timestamp => TimeType::TimestampNs,
+    };
+    stream.set_time(timeline, TimeCell::new(time_type, value));
     Ok(())
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
-pub extern "C" fn rr_recording_stream_set_time_sequence(
+#[unsafe(no_mangle)]
+pub extern "C" fn rr_recording_stream_set_time(
     stream: CRecordingStream,
     timeline_name: CStringView,
-    sequence: i64,
+    time_type: CTimeType,
+    value: i64,
     error: *mut CError,
 ) {
-    if let Err(err) = rr_recording_stream_set_time_sequence_impl(stream, timeline_name, sequence) {
-        err.write_error(error);
-    }
-}
-
-#[allow(clippy::result_large_err)]
-fn rr_recording_stream_set_time_seconds_impl(
-    stream: CRecordingStream,
-    timeline_name: CStringView,
-    seconds: f64,
-) -> Result<(), CError> {
-    let timeline = timeline_name.as_str("timeline_name")?;
-    recording_stream(stream)?.set_time_seconds(timeline, seconds);
-    Ok(())
-}
-
-#[allow(unsafe_code)]
-#[no_mangle]
-pub extern "C" fn rr_recording_stream_set_time_seconds(
-    stream: CRecordingStream,
-    timeline_name: CStringView,
-    seconds: f64,
-    error: *mut CError,
-) {
-    if let Err(err) = rr_recording_stream_set_time_seconds_impl(stream, timeline_name, seconds) {
-        err.write_error(error);
-    }
-}
-
-#[allow(clippy::result_large_err)]
-fn rr_recording_stream_set_time_nanos_impl(
-    stream: CRecordingStream,
-    timeline_name: CStringView,
-    nanos: i64,
-) -> Result<(), CError> {
-    let timeline = timeline_name.as_str("timeline_name")?;
-    recording_stream(stream)?.set_time_nanos(timeline, nanos);
-    Ok(())
-}
-
-#[allow(unsafe_code)]
-#[no_mangle]
-pub extern "C" fn rr_recording_stream_set_time_nanos(
-    stream: CRecordingStream,
-    timeline_name: CStringView,
-    nanos: i64,
-    error: *mut CError,
-) {
-    if let Err(err) = rr_recording_stream_set_time_nanos_impl(stream, timeline_name, nanos) {
+    if let Err(err) = rr_recording_stream_set_time_impl(stream, timeline_name, time_type, value) {
         err.write_error(error);
     }
 }
@@ -803,7 +892,7 @@ fn rr_recording_stream_disable_timeline_impl(
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rr_recording_stream_disable_timeline(
     stream: CRecordingStream,
     timeline_name: CStringView,
@@ -815,7 +904,7 @@ pub extern "C" fn rr_recording_stream_disable_timeline(
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rr_recording_stream_reset_time(stream: CRecordingStream) {
     if let Some(stream) = RECORDING_STREAMS.lock().get(stream) {
         stream.reset_time();
@@ -858,9 +947,10 @@ fn rr_recording_stream_log_impl(
             let CComponentBatch {
                 component_type,
                 array,
-            } = &batch;
+            } = batch;
             let component_type = component_type_registry.get(*component_type)?;
             let datatype = component_type.datatype.clone();
+            let array = unsafe { FFI_ArrowArray::from_raw(array) }; // Move out from `batches`
             let values = unsafe { arrow_array_from_c_ffi(array, datatype) }?;
             components.insert(component_type.descriptor.clone(), values);
         }
@@ -878,7 +968,7 @@ fn rr_recording_stream_log_impl(
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rr_recording_stream_log(
     stream: CRecordingStream,
     data_row: CDataRow,
@@ -916,7 +1006,7 @@ fn rr_recording_stream_log_file_from_path_impl(
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rr_recording_stream_log_file_from_path(
     stream: CRecordingStream,
     filepath: CStringView,
@@ -964,7 +1054,7 @@ fn rr_recording_stream_log_file_from_contents_impl(
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rr_recording_stream_log_file_from_contents(
     stream: CRecordingStream,
     filepath: CStringView,
@@ -989,8 +1079,8 @@ pub unsafe extern "C" fn rr_recording_stream_log_file_from_contents(
 fn rr_recording_stream_send_columns_impl(
     stream: CRecordingStream,
     entity_path: CStringView,
-    time_columns: &[CTimeColumn],
-    component_columns: &[CComponentColumns],
+    time_columns: &mut [CTimeColumn],
+    component_columns: &mut [CComponentColumns],
 ) -> Result<(), CError> {
     // Create chunk-id as early as possible. It has a timestamp and is used to estimate e2e latency.
     let id = ChunkId::new();
@@ -999,11 +1089,12 @@ fn rr_recording_stream_send_columns_impl(
     let entity_path = entity_path.as_str("entity_path")?;
 
     let time_columns: IntMap<TimelineName, TimeColumn> = time_columns
-        .iter()
+        .iter_mut()
         .map(|time_column| {
             let timeline: Timeline = time_column.timeline.clone().try_into()?;
-            let datatype = arrow2::datatypes::DataType::Int64;
-            let time_values_untyped = unsafe { arrow_array_from_c_ffi(&time_column.times, datatype) }?;
+            let datatype = arrow::datatypes::DataType::Int64;
+            let array = unsafe { FFI_ArrowArray::from_raw(&mut time_column.times) } ; // Move out of the array
+            let time_values_untyped = unsafe { arrow_array_from_c_ffi(array, datatype) }?;
             let time_values = TimeColumn::read_array(&ArrowArrayRef::from(time_values_untyped)).map_err(|err| {
                 CError::new(
                     CErrorCode::ArrowFfiArrayImportError,
@@ -1025,18 +1116,19 @@ fn rr_recording_stream_send_columns_impl(
     let components: IntMap<ComponentDescriptor, ArrowListArray> = {
         let component_type_registry = COMPONENT_TYPES.read();
         component_columns
-            .iter()
+            .iter_mut()
             .map(|batch| {
                 let CComponentColumns {
                     component_type,
                     array,
-                } = &batch;
+                } = batch;
                 let component_type = component_type_registry.get(*component_type)?;
-                let datatype = arrow2::array::ListArray::<i32>::default_datatype(
-                    component_type.datatype.clone(),
-                );
 
-                let component_values_untyped = unsafe { arrow_array_from_c_ffi(array, datatype) }?;
+                let nullable = true;
+                let list_datatype = arrow::datatypes::DataType::List(arrow::datatypes::Field::new_list_field(component_type.datatype.clone(), nullable).into());
+
+                let array = unsafe { FFI_ArrowArray::from_raw(array) }; // Move out of the array
+                let component_values_untyped = unsafe { arrow_array_from_c_ffi(array, list_datatype) }?;
                 let component_values = component_values_untyped
                     .downcast_array_ref::<ArrowListArray>()
                     .ok_or_else(|| {
@@ -1070,20 +1162,21 @@ fn rr_recording_stream_send_columns_impl(
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rr_recording_stream_send_columns(
     stream: CRecordingStream,
     entity_path: CStringView,
-    time_columns: *const CTimeColumn,
+    time_columns: *mut CTimeColumn,
     num_time_columns: u32,
-    component_batches: *const CComponentColumns,
+    component_batches: *mut CComponentColumns,
     num_component_batches: u32,
     error: *mut CError,
 ) {
     let time_columns =
-        unsafe { std::slice::from_raw_parts(time_columns, num_time_columns as usize) };
-    let component_batches =
-        unsafe { std::slice::from_raw_parts(component_batches, num_component_batches as usize) };
+        unsafe { std::slice::from_raw_parts_mut(time_columns, num_time_columns as usize) };
+    let component_batches = unsafe {
+        std::slice::from_raw_parts_mut(component_batches, num_component_batches as usize)
+    };
 
     if let Err(err) =
         rr_recording_stream_send_columns_impl(stream, entity_path, time_columns, component_batches)
@@ -1096,7 +1189,7 @@ pub unsafe extern "C" fn rr_recording_stream_send_columns(
 // Private functions
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _rr_escape_entity_path_part(part: CStringView) -> *const c_char {
     let Ok(part) = part.as_str("entity_path_part") else {
         return std::ptr::null();
@@ -1112,7 +1205,7 @@ pub unsafe extern "C" fn _rr_escape_entity_path_part(part: CStringView) -> *cons
 }
 
 #[allow(unsafe_code)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _rr_free_string(str: *mut c_char) {
     if str.is_null() {
         return;
@@ -1121,6 +1214,6 @@ pub unsafe extern "C" fn _rr_free_string(str: *mut c_char) {
     // Free the string:
     unsafe {
         // SAFETY: `_rr_free_string` should only be called on strings allocated by `_rr_escape_entity_path_part`.
-        let _ = CString::from_raw(str);
+        std::mem::drop(CString::from_raw(str));
     }
 }

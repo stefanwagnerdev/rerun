@@ -13,6 +13,7 @@ mod load_file;
 mod loader_archetype;
 mod loader_directory;
 mod loader_rrd;
+mod loader_urdf;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lerobot;
@@ -26,18 +27,23 @@ mod loader_external;
 
 pub use self::{
     load_file::load_from_file_contents, loader_archetype::ArchetypeLoader,
-    loader_directory::DirectoryLoader, loader_rrd::RrdLoader,
+    loader_directory::DirectoryLoader, loader_rrd::RrdLoader, loader_urdf::UrdfDataLoader,
+    loader_urdf::UrdfTree,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use self::{
     load_file::load_from_path,
     loader_external::{
-        iter_external_loaders, ExternalLoader, EXTERNAL_DATA_LOADER_INCOMPATIBLE_EXIT_CODE,
-        EXTERNAL_DATA_LOADER_PREFIX,
+        EXTERNAL_DATA_LOADER_INCOMPATIBLE_EXIT_CODE, EXTERNAL_DATA_LOADER_PREFIX, ExternalLoader,
+        iter_external_loaders,
     },
     loader_lerobot::LeRobotDatasetLoader,
 };
+
+pub mod external {
+    pub use urdf_rs;
+}
 
 // ----------------------------------------------------------------------------
 
@@ -53,8 +59,9 @@ pub use self::{
 /// * `--entity-path-prefix <entity_path_prefix>` (if set)
 /// * `--static` (if `timepoint` is set to the timeless timepoint)
 /// * `--timeless` \[deprecated\] (if `timepoint` is set to the timeless timepoint)
-/// * `--time <timeline1>=<time1> <timeline2>=<time2> ...` (if `timepoint` contains temporal data)
-/// * `--sequence <timeline1>=<seq1> <timeline2>=<seq2> ...` (if `timepoint` contains sequence data)
+/// * `--time_sequence <timeline1>=<seq1> <timeline2>=<seq2> ...` (if `timepoint` contains sequence data)
+/// * `--time_duration_nanos <timeline1>=<duration1> <timeline2>=<duration2> ...` (if `timepoint` contains duration data) in nanos
+/// * `--time_timestamp_nanos <timeline1>=<timestamp1> <timeline2>=<timestamp2> ...` (if `timepoint` contains timestamp data) in nanos since epoch
 #[derive(Debug, Clone)]
 pub struct DataLoaderSettings {
     /// The recommended [`re_log_types::ApplicationId`] to log the data to, based on the surrounding context.
@@ -144,18 +151,39 @@ impl DataLoaderSettings {
                 args.push("--static".to_owned());
             }
 
-            for (timeline, time) in timepoint.iter() {
-                match timeline.typ() {
-                    re_log_types::TimeType::Time => {
-                        args.extend([
-                            "--time".to_owned(),
-                            format!("{}={}", timeline.name(), time.as_i64()),
-                        ]);
-                    }
+            for (timeline, cell) in timepoint.iter() {
+                match cell.typ() {
                     re_log_types::TimeType::Sequence => {
                         args.extend([
+                            "--time_sequence".to_owned(),
+                            format!("{timeline}={}", cell.value),
+                        ]);
+
+                        // for backwards compatibility:
+                        args.extend([
                             "--sequence".to_owned(),
-                            format!("{}={}", timeline.name(), time.as_i64()),
+                            format!("{timeline}={}", cell.value),
+                        ]);
+                    }
+                    re_log_types::TimeType::DurationNs => {
+                        args.extend([
+                            "--time_duration_nanos".to_owned(),
+                            format!("{timeline}={}", cell.value),
+                        ]);
+
+                        // for backwards compatibility:
+                        args.extend(["--time".to_owned(), format!("{timeline}={}", cell.value)]);
+                    }
+                    re_log_types::TimeType::TimestampNs => {
+                        args.extend([
+                            "--time_duration_nanos".to_owned(),
+                            format!("{timeline}={}", cell.value),
+                        ]);
+
+                        // for backwards compatibility:
+                        args.extend([
+                            "--sequence".to_owned(),
+                            format!("{timeline}={}", cell.value),
                         ]);
                     }
                 }
@@ -306,7 +334,7 @@ pub enum DataLoaderError {
     #[error("No data-loader support for {0:?}")]
     Incompatible(std::path::PathBuf),
 
-    #[error(transparent)]
+    #[error("{}", re_error::format(.0))]
     Other(#[from] anyhow::Error),
 }
 
@@ -375,6 +403,7 @@ static BUILTIN_LOADERS: Lazy<Vec<Arc<dyn DataLoader>>> = Lazy::new(|| {
         Arc::new(LeRobotDatasetLoader),
         #[cfg(not(target_arch = "wasm32"))]
         Arc::new(ExternalLoader),
+        Arc::new(UrdfDataLoader),
     ]
 });
 
@@ -422,8 +451,6 @@ pub const SUPPORTED_IMAGE_EXTENSIONS: &[&str] = &[
     "pbm", "pgm", "png", "ppm", "tga", "tif", "tiff", "webp",
 ];
 
-/// Experimental video support!
-// TODO(#7298): stabilize video support
 pub const SUPPORTED_VIDEO_EXTENSIONS: &[&str] = &["mp4"];
 
 pub const SUPPORTED_MESH_EXTENSIONS: &[&str] = &["glb", "gltf", "obj", "stl"];

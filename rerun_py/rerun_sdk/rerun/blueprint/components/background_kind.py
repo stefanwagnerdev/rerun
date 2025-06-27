@@ -5,14 +5,14 @@
 
 from __future__ import annotations
 
-from typing import Literal, Sequence, Union
+from collections.abc import Sequence
+from typing import Literal, Union
 
 import pyarrow as pa
 
 from ..._baseclasses import (
     BaseBatch,
     ComponentBatchMixin,
-    ComponentDescriptor,
 )
 
 __all__ = ["BackgroundKind", "BackgroundKindArrayLike", "BackgroundKindBatch", "BackgroundKindLike"]
@@ -72,7 +72,7 @@ BackgroundKindArrayLike = Union[BackgroundKindLike, Sequence[BackgroundKindLike]
 
 class BackgroundKindBatch(BaseBatch[BackgroundKindArrayLike], ComponentBatchMixin):
     _ARROW_DATATYPE = pa.uint8()
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.blueprint.components.BackgroundKind")
+    _COMPONENT_TYPE: str = "rerun.blueprint.components.BackgroundKind"
 
     @staticmethod
     def _native_to_pa_array(data: BackgroundKindArrayLike, data_type: pa.DataType) -> pa.Array:

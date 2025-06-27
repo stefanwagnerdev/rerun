@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -22,11 +21,10 @@ class TensorHeightDimension(datatypes.TensorDimensionSelection, ComponentMixin):
     # You can define your own __init__ function as a member of TensorHeightDimensionExt in tensor_height_dimension_ext.py
 
     # Note: there are no fields here because TensorHeightDimension delegates to datatypes.TensorDimensionSelection
-    pass
 
 
 class TensorHeightDimensionBatch(datatypes.TensorDimensionSelectionBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.TensorHeightDimension")
+    _COMPONENT_TYPE: str = "rerun.components.TensorHeightDimension"
 
 
 # This is patched in late to avoid circular dependencies.

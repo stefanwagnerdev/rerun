@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -22,11 +21,10 @@ class GraphEdge(datatypes.Utf8Pair, ComponentMixin):
     # You can define your own __init__ function as a member of GraphEdgeExt in graph_edge_ext.py
 
     # Note: there are no fields here because GraphEdge delegates to datatypes.Utf8Pair
-    pass
 
 
 class GraphEdgeBatch(datatypes.Utf8PairBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.GraphEdge")
+    _COMPONENT_TYPE: str = "rerun.components.GraphEdge"
 
 
 # This is patched in late to avoid circular dependencies.

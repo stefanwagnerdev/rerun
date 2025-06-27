@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 from .media_type_ext import MediaTypeExt
@@ -28,11 +27,10 @@ class MediaType(MediaTypeExt, datatypes.Utf8, ComponentMixin):
     # You can define your own __init__ function as a member of MediaTypeExt in media_type_ext.py
 
     # Note: there are no fields here because MediaType delegates to datatypes.Utf8
-    pass
 
 
 class MediaTypeBatch(datatypes.Utf8Batch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.MediaType")
+    _COMPONENT_TYPE: str = "rerun.components.MediaType"
 
 
 # This is patched in late to avoid circular dependencies.

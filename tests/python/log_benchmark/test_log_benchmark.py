@@ -47,7 +47,7 @@ def test_bench_points3d_many_individual(benchmark: Any, num_points: int) -> None
     benchmark(log_points3d_many_individual, data)
 
 
-def log_image(image: np.ndarray, num_log_calls: int) -> None:
+def log_image(image: npt.NDArray[np.uint8], num_log_calls: int) -> None:
     # create a new, empty memory sink for the current recording
     rr.memory_recording()
 
@@ -57,7 +57,7 @@ def log_image(image: np.ndarray, num_log_calls: int) -> None:
 
 @pytest.mark.parametrize(
     ["image_dimension", "image_channels", "num_log_calls"],
-    [pytest.param(16_384, 4, 4, id="16384^2px-4channels-4calls")],
+    [pytest.param(1024, 4, 20_000, id="1024^2px-4channels-20000calls")],
 )
 def test_bench_image(benchmark: Any, image_dimension: int, image_channels: int, num_log_calls: int) -> None:
     rr.init("rerun_example_benchmark_image")
@@ -67,14 +67,16 @@ def test_bench_image(benchmark: Any, image_dimension: int, image_channels: int, 
 
 
 def test_bench_transforms_over_time_individual(
-    rand_trans: npt.NDArray, rand_quats: npt.NDArray, rand_scales: npt.NDArray
+    rand_trans: npt.NDArray[np.float32],
+    rand_quats: npt.NDArray[np.float32],
+    rand_scales: npt.NDArray[np.float32],
 ) -> None:
     # create a new, empty memory sink for the current recording
     rr.memory_recording()
 
     num_transforms = rand_trans.shape[0]
     for i in range(num_transforms):
-        rr.set_time_sequence("frame", i)
+        rr.set_time("frame", sequence=i)
         rr.log(
             "test_transform",
             rr.Transform3D(translation=rand_trans[i], rotation=rr.Quaternion(xyzw=rand_quats[i]), scale=rand_scales[i]),
@@ -82,7 +84,10 @@ def test_bench_transforms_over_time_individual(
 
 
 def test_bench_transforms_over_time_batched(
-    rand_trans: npt.NDArray, rand_quats: npt.NDArray, rand_scales: npt.NDArray, num_transforms_per_batch: int
+    rand_trans: npt.NDArray[np.float32],
+    rand_quats: npt.NDArray[np.float32],
+    rand_scales: npt.NDArray[np.float32],
+    num_transforms_per_batch: int,
 ) -> None:
     # create a new, empty memory sink for the current recording
     rr.memory_recording()
@@ -96,7 +101,7 @@ def test_bench_transforms_over_time_batched(
 
         rr.send_columns(
             "test_transform",
-            indexes=[rr.TimeSequenceColumn("frame", times)],
+            indexes=[rr.TimeColumn("frame", sequence=times)],
             columns=rr.Transform3D.columns(
                 translation=rand_trans[start:end],
                 quaternion=rand_quats[start:end],
@@ -124,7 +129,11 @@ def test_bench_transforms_over_time(benchmark: Any, num_transforms: int, num_tra
 
     if num_transforms_per_batch > 1:
         benchmark(
-            test_bench_transforms_over_time_batched, rand_trans, rand_quats, rand_scales, num_transforms_per_batch
+            test_bench_transforms_over_time_batched,
+            rand_trans,
+            rand_quats,
+            rand_scales,
+            num_transforms_per_batch,
         )
     else:
         benchmark(test_bench_transforms_over_time_individual, rand_trans, rand_quats, rand_scales)

@@ -6,9 +6,9 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::{
-    codegen::{autogen_warning, Target},
-    ObjectKind, Objects, Reporter, ATTR_RERUN_COMPONENT_REQUIRED, ATTR_RUST_DERIVE,
-    ATTR_RUST_DERIVE_ONLY,
+    ATTR_RERUN_COMPONENT_REQUIRED, ATTR_RUST_DERIVE, ATTR_RUST_DERIVE_ONLY, ObjectKind, Objects,
+    Reporter,
+    codegen::{Target, autogen_warning},
 };
 
 use super::util::{append_tokens, doc_as_lines};
@@ -38,6 +38,8 @@ pub fn generate_reflection(
     code.push_str("#![allow(clippy::too_many_lines)]\n");
     code.push_str("#![allow(clippy::wildcard_imports)]\n\n");
     code.push_str("#![allow(unused_imports)]\n");
+    code.push_str("#![expect(clippy::empty_line_after_doc_comments)]\n");
+    code.push('\n');
     for namespace in imports {
         code.push_str(&format!("use {namespace};\n"));
     }
@@ -45,10 +47,10 @@ pub fn generate_reflection(
     let quoted_reflection = quote! {
         use re_types_core::{
             ArchetypeName,
-            ComponentName,
+            ComponentType,
             Component,
             Loggable as _,
-            LoggableBatch as _,
+            ComponentBatch as _,
             reflection::{
                 ArchetypeFieldReflection,
                 ArchetypeReflection,
@@ -109,7 +111,7 @@ fn generate_component_reflection(
         } else {
             // Works too
             let fqname = &obj.fqname;
-            quote!( ComponentName::new(#fqname) )
+            quote!( ComponentType::new(#fqname) )
         };
 
         let docstring_md = doc_as_lines(
@@ -117,18 +119,23 @@ fn generate_component_reflection(
             objects,
             &obj.virtpath,
             &obj.fqname,
+            &obj.state,
             &obj.docs,
             Target::WebDocsMarkdown,
-            obj.is_experimental(),
         )
         .join("\n");
 
         // Emit custom placeholder if there's a default implementation
-        let auto_derive_default = obj.is_enum() // All enums have default values currently!
-            || obj
-                .try_get_attr::<String>(ATTR_RUST_DERIVE_ONLY)
-                .or_else(|| obj.try_get_attr::<String>(ATTR_RUST_DERIVE))
-                .is_some_and(|derives| derives.contains("Default"));
+        let is_enum_with_default = obj.is_enum()
+            && obj
+                .fields
+                .iter()
+                .any(|field| field.attrs.has(crate::ATTR_DEFAULT));
+        let has_default_attr = obj
+            .try_get_attr::<String>(ATTR_RUST_DERIVE_ONLY)
+            .or_else(|| obj.try_get_attr::<String>(ATTR_RUST_DERIVE))
+            .is_some_and(|derives| derives.contains("Default"));
+        let auto_derive_default = is_enum_with_default || has_default_attr;
         let has_custom_default_impl =
             extension_contents_for_fqname
                 .get(&obj.fqname)
@@ -142,11 +149,19 @@ fn generate_component_reflection(
             quote! { None }
         };
 
+        let deprecation_summary = if let Some(notice) = obj.deprecation_summary() {
+            quote! { Some(#notice) }
+        } else {
+            quote! { None }
+        };
+
         let quoted_reflection = quote! {
             ComponentReflection {
                 docstring_md: #docstring_md,
+                deprecation_summary: #deprecation_summary,
                 custom_placeholder: #custom_placeholder,
                 datatype: #type_name::arrow_datatype(),
+                verify_arrow_array: #type_name::verify_arrow_array,
             }
         };
         quoted_pairs.push(quote! { (#quoted_name, #quoted_reflection) });
@@ -156,7 +171,6 @@ fn generate_component_reflection(
         #[doc = "Generates reflection about all known components."]
         #[doc = ""]
         #[doc = "Call only once and reuse the results."]
-        #[allow(deprecated)]
         fn generate_component_reflection() -> Result<ComponentReflectionMap, SerializationError> {
             re_tracing::profile_function!();
             let array = [
@@ -176,8 +190,13 @@ fn generate_archetype_reflection(reporter: &Reporter, objects: &Objects) -> Toke
         .filter(|obj| !obj.is_testing())
     {
         let quoted_field_reflections = obj.fields.iter().map(|field| {
-            let Some(component_name) = field.typ.fqname() else {
-                panic!("archetype field must be an object/union or an array/vector of such")
+            let Some(component_type) = field.typ.fqname() else {
+                reporter.error(
+                    &field.virtpath,
+                    &field.fqname,
+                    "Archetype field must be an object/union or an array/vector of such",
+                );
+                return TokenStream::new();
             };
             let name = &field.name;
             let display_name = re_case::to_human_case(&field.name);
@@ -186,9 +205,9 @@ fn generate_archetype_reflection(reporter: &Reporter, objects: &Objects) -> Toke
                 objects,
                 &field.virtpath,
                 &field.fqname,
+                &field.state,
                 &field.docs,
                 Target::WebDocsMarkdown,
-                obj.is_experimental(),
             )
             .join("\n");
             let required = field.attrs.has(ATTR_RERUN_COMPONENT_REQUIRED);
@@ -197,7 +216,7 @@ fn generate_archetype_reflection(reporter: &Reporter, objects: &Objects) -> Toke
                 ArchetypeFieldReflection {
                     name: #name,
                     display_name: #display_name,
-                    component_name: #component_name.into(),
+                    component_type: #component_type.into(),
                     docstring_md: #docstring_md,
                     is_required: #required,
                 }
@@ -216,9 +235,9 @@ fn generate_archetype_reflection(reporter: &Reporter, objects: &Objects) -> Toke
                 objects,
                 &obj.virtpath,
                 &obj.fqname,
+                &obj.state,
                 &obj.docs,
                 Target::WebDocsMarkdown,
-                obj.is_experimental(),
             )
             .join("\n");
         }
@@ -239,9 +258,17 @@ fn generate_archetype_reflection(reporter: &Reporter, objects: &Objects) -> Toke
             })
             .collect_vec();
 
+        let deprecation_summary = if let Some(notice) = obj.deprecation_summary() {
+            quote! { Some(#notice) }
+        } else {
+            quote! { None }
+        };
+
         let quoted_archetype_reflection = quote! {
             ArchetypeReflection {
                 display_name: #display_name,
+
+                deprecation_summary: #deprecation_summary,
 
                 scope: #scope,
 

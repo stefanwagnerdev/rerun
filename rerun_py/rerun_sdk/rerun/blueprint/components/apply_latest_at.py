@@ -8,7 +8,6 @@ from __future__ import annotations
 from ... import datatypes
 from ..._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -16,17 +15,20 @@ __all__ = ["ApplyLatestAt", "ApplyLatestAtBatch"]
 
 
 class ApplyLatestAt(datatypes.Bool, ComponentMixin):
-    """**Component**: Whether empty cells in a dataframe should be filled with a latest-at query."""
+    """
+    **Component**: Whether empty cells in a dataframe should be filled with a latest-at query.
+
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    """
 
     _BATCH_TYPE = None
     # You can define your own __init__ function as a member of ApplyLatestAtExt in apply_latest_at_ext.py
 
     # Note: there are no fields here because ApplyLatestAt delegates to datatypes.Bool
-    pass
 
 
 class ApplyLatestAtBatch(datatypes.BoolBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.blueprint.components.ApplyLatestAt")
+    _COMPONENT_TYPE: str = "rerun.blueprint.components.ApplyLatestAt"
 
 
 # This is patched in late to avoid circular dependencies.

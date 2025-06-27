@@ -21,7 +21,11 @@ __all__ = ["ForceCollisionRadius"]
 
 @define(str=False, repr=False, init=False)
 class ForceCollisionRadius(Archetype):
-    """**Archetype**: Resolves collisions between the bounding circles, according to the radius of the nodes."""
+    """
+    **Archetype**: Resolves collisions between the bounding circles, according to the radius of the nodes.
+
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    """
 
     def __init__(
         self: Any,
@@ -29,7 +33,7 @@ class ForceCollisionRadius(Archetype):
         enabled: datatypes.BoolLike | None = None,
         strength: datatypes.Float64Like | None = None,
         iterations: datatypes.UInt64Like | None = None,
-    ):
+    ) -> None:
         """
         Create a new instance of the ForceCollisionRadius archetype.
 

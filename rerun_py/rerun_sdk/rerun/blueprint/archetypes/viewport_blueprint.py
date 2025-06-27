@@ -21,7 +21,11 @@ __all__ = ["ViewportBlueprint"]
 
 @define(str=False, repr=False, init=False)
 class ViewportBlueprint(Archetype):
-    """**Archetype**: The top-level description of the viewport."""
+    """
+    **Archetype**: The top-level description of the viewport.
+
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    """
 
     def __init__(
         self: Any,
@@ -31,7 +35,7 @@ class ViewportBlueprint(Archetype):
         auto_layout: datatypes.BoolLike | None = None,
         auto_views: datatypes.BoolLike | None = None,
         past_viewer_recommendations: datatypes.UInt64ArrayLike | None = None,
-    ):
+    ) -> None:
         """
         Create a new instance of the ViewportBlueprint archetype.
 

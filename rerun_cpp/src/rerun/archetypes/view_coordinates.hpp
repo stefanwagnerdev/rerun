@@ -50,23 +50,26 @@ namespace rerun::archetypes {
     ///     );
     /// }
     /// ```
+    ///
+    /// ⚠ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    ///
     struct ViewCoordinates {
         /// The directions of the [x, y, z] axes.
         std::optional<ComponentBatch> xyz;
 
       public:
-        static constexpr const char IndicatorComponentName[] =
+        static constexpr const char IndicatorComponentType[] =
             "rerun.components.ViewCoordinatesIndicator";
 
         /// Indicator component, used to identify the archetype when converting to a list of components.
-        using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentName>;
+        using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentType>;
         /// The name of the archetype as used in `ComponentDescriptor`s.
         static constexpr const char ArchetypeName[] = "rerun.archetypes.ViewCoordinates";
 
         /// `ComponentDescriptor` for the `xyz` field.
         static constexpr auto Descriptor_xyz = ComponentDescriptor(
-            ArchetypeName, "xyz",
-            Loggable<rerun::components::ViewCoordinates>::Descriptor.component_name
+            ArchetypeName, "ViewCoordinates:xyz",
+            Loggable<rerun::components::ViewCoordinates>::ComponentType
         );
 
       public: // START of extensions from view_coordinates_ext.cpp:

@@ -1,7 +1,7 @@
 use std::fmt;
-use std::io::IsTerminal;
+use std::io::IsTerminal as _;
 use std::sync::Weak;
-use std::sync::{atomic::AtomicI64, Arc};
+use std::sync::{Arc, atomic::AtomicI64};
 use std::time::Duration;
 
 use ahash::HashMap;
@@ -16,10 +16,12 @@ use re_chunk::{
 };
 use re_log_types::{
     ApplicationId, ArrowRecordBatchReleaseCallback, BlueprintActivationCommand, EntityPath, LogMsg,
-    StoreId, StoreInfo, StoreKind, StoreSource, Time, TimeInt, TimePoint, TimeType, Timeline,
+    StoreId, StoreInfo, StoreKind, StoreSource, TimeCell, TimeInt, TimePoint, Timeline,
     TimelineName,
 };
-use re_types_core::{AsComponents, SerializationError, SerializedComponentColumn};
+use re_types::archetypes::RecordingProperties;
+use re_types::components::Timestamp;
+use re_types::{AsComponents, SerializationError, SerializedComponentColumn};
 
 #[cfg(feature = "web_viewer")]
 use re_web_viewer_server::WebViewerServerPort;
@@ -32,7 +34,7 @@ use crate::sink::{LogSink, MemorySinkStorage};
 /// Private environment variable meant for tests.
 ///
 /// When set, all recording streams will write to disk at the path indicated by the env-var rather
-/// than doing what they were asked to do - `connect()`, `buffered()`, even `save()` will re-use the same sink.
+/// than doing what they were asked to do - `connect_grpc()`, `buffered()`, even `save()` will re-use the same sink.
 const ENV_FORCE_SAVE: &str = "_RERUN_TEST_FORCE_SAVE";
 
 /// Returns path for force sink if private environment variable `_RERUN_TEST_FORCE_SAVE` is set
@@ -95,6 +97,10 @@ pub enum RecordingStreamError {
     /// Invalid endpoint
     #[error("not a `/proxy` endpoint")]
     NotAProxyEndpoint,
+
+    /// Invalid bind IP.
+    #[error(transparent)]
+    InvalidAddress(#[from] std::net::AddrParseError),
 }
 
 /// Results that can occur when creating/manipulating a [`RecordingStream`].
@@ -109,6 +115,9 @@ pub type RecordingStreamResult<T> = Result<T, RecordingStreamError>;
 /// let rec = RecordingStreamBuilder::new("rerun_example_app").save("my_recording.rrd")?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
+///
+/// Automatically sends a [`Chunk`] with the default [`RecordingProperties`] to
+/// the sink, unless an explicit `recording_id` is set via [`RecordingStreamBuilder::recording_id`].
 #[derive(Debug)]
 pub struct RecordingStreamBuilder {
     application_id: ApplicationId,
@@ -121,7 +130,9 @@ pub struct RecordingStreamBuilder {
 
     batcher_config: Option<ChunkBatcherConfig>,
 
-    is_official_example: bool,
+    // Optional user-defined recording properties.
+    should_send_properties: bool,
+    properties: RecordingProperties,
 }
 
 impl RecordingStreamBuilder {
@@ -139,7 +150,6 @@ impl RecordingStreamBuilder {
     #[track_caller]
     pub fn new(application_id: impl Into<ApplicationId>) -> Self {
         let application_id = application_id.into();
-        let is_official_example = crate::called_from_official_rust_example();
 
         Self {
             application_id,
@@ -151,7 +161,10 @@ impl RecordingStreamBuilder {
             enabled: None,
 
             batcher_config: None,
-            is_official_example,
+
+            should_send_properties: true,
+            properties: RecordingProperties::new()
+                .with_start_time(re_types::components::Timestamp::now()),
         }
     }
 
@@ -186,12 +199,44 @@ impl RecordingStreamBuilder {
     /// unique `RecordingId`s.
     ///
     /// The default is to use a random `RecordingId`.
+    ///
+    /// When explicitly setting a `RecordingId`, the initial chunk that contains the recording
+    /// properties will not be sent.
     #[inline]
     pub fn recording_id(mut self, recording_id: impl Into<String>) -> Self {
         self.store_id = Some(StoreId::from_string(
             StoreKind::Recording,
             recording_id.into(),
         ));
+        self.send_properties(false)
+    }
+
+    /// Sets an optional name for the recording.
+    #[inline]
+    pub fn recording_name(mut self, name: impl Into<String>) -> Self {
+        self.properties = self.properties.with_name(name.into());
+        self
+    }
+
+    /// Sets an optional name for the recording.
+    #[inline]
+    pub fn recording_started(mut self, started: impl Into<Timestamp>) -> Self {
+        self.properties = self.properties.with_start_time(started);
+        self
+    }
+
+    #[deprecated(since = "0.22.0", note = "use `send_properties` instead")]
+    /// Disables sending the [`RecordingProperties`] chunk.
+    #[inline]
+    pub fn disable_properties(mut self) -> Self {
+        self.should_send_properties = false;
+        self
+    }
+
+    /// Whether the [`RecordingProperties`] chunk should be sent.
+    #[inline]
+    pub fn send_properties(mut self, should_send: bool) -> Self {
+        self.should_send_properties = should_send;
         self
     }
 
@@ -227,14 +272,6 @@ impl RecordingStreamBuilder {
         self
     }
 
-    #[allow(clippy::wrong_self_convention)]
-    #[doc(hidden)]
-    #[inline]
-    pub fn is_official_example(mut self, is_official_example: bool) -> Self {
-        self.is_official_example = is_official_example;
-        self
-    }
-
     #[doc(hidden)]
     #[inline]
     pub fn blueprint(mut self) -> Self {
@@ -251,10 +288,11 @@ impl RecordingStreamBuilder {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn buffered(self) -> RecordingStreamResult<RecordingStream> {
-        let (enabled, store_info, batcher_config) = self.into_args();
+        let (enabled, store_info, properties, batcher_config) = self.into_args();
         if enabled {
             RecordingStream::new(
                 store_info,
+                properties,
                 batcher_config,
                 Box::new(crate::log_sink::BufferedSink::new()),
             )
@@ -283,10 +321,11 @@ impl RecordingStreamBuilder {
     pub fn memory(
         self,
     ) -> RecordingStreamResult<(RecordingStream, crate::log_sink::MemorySinkStorage)> {
-        let (enabled, store_info, batcher_config) = self.into_args();
+        let (enabled, store_info, properties, batcher_config) = self.into_args();
         let rec = if enabled {
             RecordingStream::new(
                 store_info,
+                properties,
                 batcher_config,
                 Box::new(crate::log_sink::BufferedSink::new()),
             )
@@ -306,43 +345,28 @@ impl RecordingStreamBuilder {
         Ok((rec, storage))
     }
 
-    /// Creates a new [`RecordingStream`] that is pre-configured to stream the data through to a
-    /// remote Rerun instance.
+    /// Creates a new [`RecordingStream`] pre-configured to stream data to multiple sinks.
     ///
-    /// See also [`Self::connect_tcp_opts`] if you wish to configure the TCP connection.
+    /// Currently only supports [`GrpcSink`][grpc_sink] and [`FileSink`][file_sink].
     ///
-    /// ## Example
-    ///
-    /// ```no_run
-    /// let rec = re_sdk::RecordingStreamBuilder::new("rerun_example_app").connect_tcp()?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    #[deprecated(since = "0.23.0", note = "use connect_grpc() instead")]
-    pub fn connect_tcp(self) -> RecordingStreamResult<RecordingStream> {
-        self.connect_grpc()
-    }
-
-    /// Creates a new [`RecordingStream`] that is pre-configured to stream the data through to a
-    /// remote Rerun instance.
-    ///
-    /// `flush_timeout` is the minimum time the [`GrpcSink`][`crate::log_sink::GrpcSink`] will
-    /// wait during a flush before potentially dropping data. Note: Passing `None` here can cause a
-    /// call to `flush` to block indefinitely if a connection cannot be established.
-    ///
-    /// ## Example
-    ///
-    /// ```no_run
-    /// let rec = re_sdk::RecordingStreamBuilder::new("rerun_example_app")
-    ///     .connect_tcp_opts(re_sdk::default_server_addr(), re_sdk::default_flush_timeout())?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    #[deprecated(since = "0.23.0", note = "use connect_grpc() instead")]
-    pub fn connect_tcp_opts(
+    /// [grpc_sink]: crate::sink::GrpcSink
+    /// [file_sink]: crate::sink::FileSink
+    pub fn set_sinks(
         self,
-        addr: std::net::SocketAddr,
-        flush_timeout: Option<Duration>,
+        sinks: impl crate::sink::IntoMultiSink,
     ) -> RecordingStreamResult<RecordingStream> {
-        self.connect_grpc_opts(format!("rerun+http://{addr}/proxy"), flush_timeout)
+        let (enabled, store_info, properties, batcher_config) = self.into_args();
+        if enabled {
+            RecordingStream::new(
+                store_info,
+                properties,
+                batcher_config,
+                Box::new(sinks.into_multi_sink()),
+            )
+        } else {
+            re_log::debug!("Rerun disabled - call to set_sinks() ignored");
+            Ok(RecordingStream::disabled())
+        }
     }
 
     /// Creates a new [`RecordingStream`] that is pre-configured to stream the data through to a
@@ -385,21 +409,85 @@ impl RecordingStreamBuilder {
         url: impl Into<String>,
         flush_timeout: Option<Duration>,
     ) -> RecordingStreamResult<RecordingStream> {
-        let (enabled, store_info, batcher_config) = self.into_args();
+        let (enabled, store_info, properties, batcher_config) = self.into_args();
         if enabled {
             let url: String = url.into();
-            let re_uri::RedapUri::Proxy(endpoint) = re_uri::RedapUri::try_from(url.as_str())?
-            else {
+            let re_uri::RedapUri::Proxy(uri) = url.as_str().parse()? else {
                 return Err(RecordingStreamError::NotAProxyEndpoint);
             };
 
             RecordingStream::new(
                 store_info,
+                properties,
                 batcher_config,
-                Box::new(crate::log_sink::GrpcSink::new(endpoint, flush_timeout)),
+                Box::new(crate::log_sink::GrpcSink::new(uri, flush_timeout)),
             )
         } else {
             re_log::debug!("Rerun disabled - call to connect() ignored");
+            Ok(RecordingStream::disabled())
+        }
+    }
+
+    #[cfg(feature = "server")]
+    /// Creates a new [`RecordingStream`] that is pre-configured to stream the data through to a
+    /// locally hosted gRPC server.
+    ///
+    /// The server is hosted on the default IP and port, and may be connected to by any SDK or Viewer
+    /// at `rerun+http://127.0.0.1:9876/proxy` or by just running `rerun --connect`.
+    ///
+    /// To configure the gRPC server's IP and port, use [`Self::serve_grpc_opts`] instead.
+    ///
+    /// The gRPC server will buffer in memory so that late connecting viewers will still get all the data.
+    /// You can limit the amount of data buffered by the gRPC server using [`Self::serve_grpc_opts`],
+    /// with the `server_memory_limit` argument. Once the memory limit is reached, the earliest logged data
+    /// will be dropped. Static data is never dropped.
+    ///
+    /// It is highly recommended that you use [`Self::serve_grpc_opts`] and set the memory limit to `0B`
+    /// if both the server and client are running on the same machine, otherwise you're potentially
+    /// doubling your memory usage!
+    pub fn serve_grpc(self) -> RecordingStreamResult<RecordingStream> {
+        self.serve_grpc_opts(
+            "0.0.0.0",
+            crate::DEFAULT_SERVER_PORT,
+            re_memory::MemoryLimit::from_fraction_of_total(0.25),
+        )
+    }
+
+    #[cfg(feature = "server")]
+    /// Creates a new [`RecordingStream`] that is pre-configured to stream the data through to a
+    /// locally hosted gRPC server.
+    ///
+    /// The server is hosted on the given `bind_ip` and `port`, may be connected to by any SDK or Viewer
+    /// at `rerun+http://{bind_ip}:{port}/proxy`.
+    ///
+    /// `0.0.0.0` is a good default for `bind_ip`.
+    ///
+    /// The gRPC server will buffer all log data in memory so that late connecting viewers will get all the data.
+    /// You can limit the amount of data buffered by the gRPC server with the `server_memory_limit` argument.
+    /// Once reached, the earliest logged data will be dropped. Static data is never dropped.
+    ///
+    /// It is highly recommended that you set the memory limit to `0B` if both the server and client are running
+    /// on the same machine, otherwise you're potentially doubling your memory usage!
+    pub fn serve_grpc_opts(
+        self,
+        bind_ip: impl AsRef<str>,
+        port: u16,
+        server_memory_limit: re_memory::MemoryLimit,
+    ) -> RecordingStreamResult<RecordingStream> {
+        let (enabled, store_info, properties, batcher_config) = self.into_args();
+        if enabled {
+            RecordingStream::new(
+                store_info,
+                properties,
+                batcher_config,
+                Box::new(crate::grpc_server::GrpcServerSink::new(
+                    bind_ip.as_ref(),
+                    port,
+                    server_memory_limit,
+                )?),
+            )
+        } else {
+            re_log::debug!("Rerun disabled - call to serve_grpc() ignored");
             Ok(RecordingStream::disabled())
         }
     }
@@ -422,11 +510,12 @@ impl RecordingStreamBuilder {
         self,
         path: impl Into<std::path::PathBuf>,
     ) -> RecordingStreamResult<RecordingStream> {
-        let (enabled, store_info, batcher_config) = self.into_args();
+        let (enabled, store_info, properties, batcher_config) = self.into_args();
 
         if enabled {
             RecordingStream::new(
                 store_info,
+                properties,
                 batcher_config,
                 Box::new(crate::sink::FileSink::new(path)?),
             )
@@ -454,11 +543,12 @@ impl RecordingStreamBuilder {
             return self.buffered();
         }
 
-        let (enabled, store_info, batcher_config) = self.into_args();
+        let (enabled, store_info, properties, batcher_config) = self.into_args();
 
         if enabled {
             RecordingStream::new(
                 store_info,
+                properties,
                 batcher_config,
                 Box::new(crate::sink::FileSink::stdout()?),
             )
@@ -531,7 +621,7 @@ impl RecordingStreamBuilder {
     }
 
     /// Creates a new [`RecordingStream`] that is pre-configured to stream the data through to a
-    /// web-based Rerun viewer via WebSockets.
+    /// web-based Rerun viewer via gRPC.
     ///
     /// If the `open_browser` argument is `true`, your default browser will be opened with a
     /// connected web-viewer.
@@ -540,61 +630,13 @@ impl RecordingStreamBuilder {
     ///
     /// ## Details
     /// This method will spawn two servers: one HTTPS server serving the Rerun Web Viewer `.html` and `.wasm` files,
-    /// and then one WebSocket server that streams the log data to the web viewer (or to a native viewer, or to multiple viewers).
+    /// and then one gRPC server that streams the log data to the web viewer (or to a native viewer, or to multiple viewers).
     ///
-    /// The WebSocket server will buffer all log data in memory so that late connecting viewers will get all the data.
-    /// You can limit the amount of data buffered by the WebSocket server with the `server_memory_limit` argument.
-    /// Once reached, the earliest logged data will be dropped.
-    /// Note that this means that static data may be dropped if logged early (see <https://github.com/rerun-io/rerun/issues/5531>).
+    /// The gRPC server will buffer all log data in memory so that late connecting viewers will get all the data.
+    /// You can limit the amount of data buffered by the gRPC server with the `server_memory_limit` argument.
+    /// Once reached, the earliest logged data will be dropped. Static data is never dropped.
     ///
-    /// ## Example
-    ///
-    /// ```ignore
-    /// let rec = re_sdk::RecordingStreamBuilder::new("rerun_example_app")
-    ///     .serve("0.0.0.0",
-    ///            Default::default(),
-    ///            Default::default(),
-    ///            re_sdk::MemoryLimit::from_fraction_of_total(0.25),
-    ///            true)?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    //
-    // # TODO(#5531): keep static data around.
-    #[cfg(feature = "web_viewer")]
-    #[deprecated(since = "0.20.0", note = "use serve_web() instead")]
-    pub fn serve(
-        self,
-        bind_ip: &str,
-        web_port: WebViewerServerPort,
-        grpc_port: u16,
-        server_memory_limit: re_memory::MemoryLimit,
-        open_browser: bool,
-    ) -> RecordingStreamResult<RecordingStream> {
-        self.serve_web(
-            bind_ip,
-            web_port,
-            grpc_port,
-            server_memory_limit,
-            open_browser,
-        )
-    }
-
-    /// Creates a new [`RecordingStream`] that is pre-configured to stream the data through to a
-    /// web-based Rerun viewer via WebSockets.
-    ///
-    /// If the `open_browser` argument is `true`, your default browser will be opened with a
-    /// connected web-viewer.
-    ///
-    /// If not, you can connect to this server using the `rerun` binary (`cargo install rerun-cli --locked`).
-    ///
-    /// ## Details
-    /// This method will spawn two servers: one HTTPS server serving the Rerun Web Viewer `.html` and `.wasm` files,
-    /// and then one WebSocket server that streams the log data to the web viewer (or to a native viewer, or to multiple viewers).
-    ///
-    /// The WebSocket server will buffer all log data in memory so that late connecting viewers will get all the data.
-    /// You can limit the amount of data buffered by the WebSocket server with the `server_memory_limit` argument.
-    /// Once reached, the earliest logged data will be dropped.
-    /// Note that this means that static data may be dropped if logged early (see <https://github.com/rerun-io/rerun/issues/5531>).
+    /// Calling `serve_web` is equivalent to calling [`Self::serve_grpc`] followed by [`crate::serve_web_viewer`].
     ///
     /// ## Example
     ///
@@ -609,6 +651,11 @@ impl RecordingStreamBuilder {
     /// ```
     //
     // # TODO(#5531): keep static data around.
+    #[deprecated(
+        since = "0.24.0",
+        note = "Use `rec.serve_grpc()` + `rerun::serve_web_viewer()` instead.
+        See: https://www.rerun.io/docs/reference/migration/migration-0-24?speculative-link for more details."
+    )]
     #[cfg(feature = "web_viewer")]
     pub fn serve_web(
         self,
@@ -618,7 +665,7 @@ impl RecordingStreamBuilder {
         server_memory_limit: re_memory::MemoryLimit,
         open_browser: bool,
     ) -> RecordingStreamResult<RecordingStream> {
-        let (enabled, store_info, batcher_config) = self.into_args();
+        let (enabled, store_info, properties, batcher_config) = self.into_args();
         if enabled {
             let sink = crate::web_viewer::new_sink(
                 open_browser,
@@ -627,7 +674,7 @@ impl RecordingStreamBuilder {
                 grpc_port,
                 server_memory_limit,
             )?;
-            RecordingStream::new(store_info, batcher_config, sink)
+            RecordingStream::new(store_info, properties, batcher_config, sink)
         } else {
             re_log::debug!("Rerun disabled - call to serve() ignored");
             Ok(RecordingStream::disabled())
@@ -639,7 +686,14 @@ impl RecordingStreamBuilder {
     ///
     /// This can be used to then construct a [`RecordingStream`] manually using
     /// [`RecordingStream::new`].
-    pub fn into_args(self) -> (bool, StoreInfo, ChunkBatcherConfig) {
+    pub fn into_args(
+        self,
+    ) -> (
+        bool,
+        StoreInfo,
+        Option<RecordingProperties>,
+        ChunkBatcherConfig,
+    ) {
         let enabled = self.is_enabled();
 
         let Self {
@@ -650,7 +704,8 @@ impl RecordingStreamBuilder {
             default_enabled: _,
             enabled: _,
             batcher_config,
-            is_official_example,
+            should_send_properties,
+            properties,
         } = self;
 
         let store_id = store_id.unwrap_or(StoreId::random(store_kind));
@@ -663,8 +718,6 @@ impl RecordingStreamBuilder {
             application_id,
             store_id,
             cloned_from: None,
-            is_official_example,
-            started: Time::now(),
             store_source,
             store_version: Some(re_build_info::CrateVersion::LOCAL),
         };
@@ -678,7 +731,12 @@ impl RecordingStreamBuilder {
                 }
             });
 
-        (enabled, store_info, batcher_config)
+        (
+            enabled,
+            store_info,
+            should_send_properties.then_some(properties),
+            batcher_config,
+        )
     }
 
     /// Internal check for whether or not logging is enabled using explicit/default settings & env var.
@@ -785,6 +843,7 @@ impl Drop for RecordingStream {
 
 struct RecordingStreamInner {
     info: StoreInfo,
+    properties: Option<RecordingProperties>,
     tick: AtomicI64,
 
     /// The one and only entrypoint into the pipeline: this is _never_ cloned nor publicly exposed,
@@ -816,7 +875,9 @@ impl fmt::Debug for RecordingStreamInner {
 impl Drop for RecordingStreamInner {
     fn drop(&mut self) {
         if self.is_forked_child() {
-            re_log::error_once!("Fork detected while dropping RecordingStreamInner. cleanup_if_forked() should always be called after forking. This is likely a bug in the SDK.");
+            re_log::error_once!(
+                "Fork detected while dropping RecordingStreamInner. cleanup_if_forked() should always be called after forking. This is likely a bug in the SDK."
+            );
             return;
         }
 
@@ -836,6 +897,7 @@ impl Drop for RecordingStreamInner {
 impl RecordingStreamInner {
     fn new(
         info: StoreInfo,
+        properties: Option<RecordingProperties>,
         batcher_config: ChunkBatcherConfig,
         sink: Box<dyn LogSink>,
     ) -> RecordingStreamResult<Self> {
@@ -874,8 +936,22 @@ impl RecordingStreamInner {
                 })?
         };
 
+        if let Some(properties) = properties.as_ref() {
+            // We pre-populate the batcher with a chunk the contains the recording
+            // properties, so that these get automatically sent to the sink.
+
+            re_log::debug!(properties = ?properties, "adding recording properties to batcher");
+
+            let properties_chunk = Chunk::builder(EntityPath::recording_properties())
+                .with_archetype(RowId::new(), TimePoint::default(), properties)
+                .build()?;
+
+            batcher.push_chunk(properties_chunk);
+        }
+
         Ok(Self {
             info,
+            properties,
             tick: AtomicI64::new(0),
             cmds_tx,
             batcher,
@@ -932,6 +1008,7 @@ impl RecordingStream {
     #[must_use = "Recording will get closed automatically once all instances of this object have been dropped"]
     pub fn new(
         info: StoreInfo,
+        properties: Option<RecordingProperties>,
         batcher_config: ChunkBatcherConfig,
         sink: Box<dyn LogSink>,
     ) -> RecordingStreamResult<Self> {
@@ -940,12 +1017,20 @@ impl RecordingStream {
             .flatten()
             .map_or(sink, |path| {
                 re_log::info!("Forcing FileSink because of env-var {ENV_FORCE_SAVE}={path:?}");
-                // `unwrap` is ok since this force sinks are only used in tests.
-                Box::new(crate::sink::FileSink::new(path).unwrap()) as Box<dyn LogSink>
+                Box::new(
+                    crate::sink::FileSink::new(path)
+                        .expect("Failed to create FileSink for forced test path"),
+                ) as Box<dyn LogSink>
             });
-        RecordingStreamInner::new(info, batcher_config, sink).map(|inner| Self {
-            inner: Either::Left(Arc::new(Some(inner))),
-        })
+
+        let stream =
+            RecordingStreamInner::new(info, properties, batcher_config, sink).map(|inner| {
+                Self {
+                    inner: Either::Left(Arc::new(Some(inner))),
+                }
+            })?;
+
+        Ok(stream)
     }
 
     /// Creates a new no-op [`RecordingStream`] that drops all logging messages, doesn't allocate
@@ -1006,11 +1091,11 @@ impl RecordingStream {
     ///
     /// Unlike the regular `log` API, which is row-oriented, this API lets you submit the data
     /// in a columnar form. The lengths of all of the [`TimeColumn`] and the component columns
-    /// must match. All data that occurs at the same index across the different time and components
+    /// must match. All data that occurs at the same index across the different index/time and components
     /// arrays will act as a single logical row.
     ///
-    /// Note that this API ignores any stateful time set on the log stream via the
-    /// [`Self::set_timepoint`]/[`Self::set_time_nanos`]/etc. APIs.
+    /// Note that this API ignores any stateful index/time set on the log stream via the
+    /// [`Self::set_time`]/[`Self::set_timepoint`]/[`Self::set_time_nanos`]/etc. APIs.
     /// Furthermore, this will _not_ inject the default timelines `log_tick` and `log_time` timeline columns.
     pub fn send_columns(
         &self,
@@ -1134,10 +1219,38 @@ impl RecordingStream {
         &self,
         ent_path: impl Into<EntityPath>,
         static_: bool,
-        comp_batches: impl IntoIterator<Item = re_types_core::SerializedComponentBatch>,
+        comp_batches: impl IntoIterator<Item = re_types::SerializedComponentBatch>,
     ) -> RecordingStreamResult<()> {
         let row_id = RowId::new(); // Create row-id as early as possible. It has a timestamp and is used to estimate e2e latency.
         self.log_serialized_batches_impl(row_id, ent_path, static_, comp_batches)
+    }
+
+    /// Sends a property to the recording.
+    #[inline]
+    pub fn send_property<AS: ?Sized + AsComponents>(
+        &self,
+        name: impl Into<String>,
+        values: &AS,
+    ) -> RecordingStreamResult<()> {
+        let sub_path = EntityPath::from(name.into());
+        self.log_static(EntityPath::properties().join(&sub_path), values)
+    }
+
+    /// Sends the name of the recording.
+    #[inline]
+    pub fn send_recording_name(&self, name: impl Into<String>) -> RecordingStreamResult<()> {
+        let update = RecordingProperties::update_fields().with_name(name.into());
+        self.log_static(EntityPath::recording_properties(), &update)
+    }
+
+    /// Sends the start time of the recording.
+    #[inline]
+    pub fn send_recording_start_time(
+        &self,
+        timestamp: impl Into<Timestamp>,
+    ) -> RecordingStreamResult<()> {
+        let update = RecordingProperties::update_fields().with_start_time(timestamp.into());
+        self.log_static(EntityPath::recording_properties(), &update)
     }
 
     // NOTE: For bw and fw compatibility reasons, we need our logging APIs to be fallible, even
@@ -1148,7 +1261,7 @@ impl RecordingStream {
         row_id: RowId,
         entity_path: impl Into<EntityPath>,
         static_: bool,
-        comp_batches: impl IntoIterator<Item = re_types_core::SerializedComponentBatch>,
+        comp_batches: impl IntoIterator<Item = re_types::SerializedComponentBatch>,
     ) -> RecordingStreamResult<()> {
         if !self.is_enabled() {
             return Ok(()); // silently drop the message
@@ -1228,7 +1341,9 @@ impl RecordingStream {
         prefer_current_recording: bool,
     ) -> RecordingStreamResult<()> {
         let Some(store_info) = self.store_info().clone() else {
-            re_log::warn!("Ignored call to log_file() because RecordingStream has not been properly initialized");
+            re_log::warn!(
+                "Ignored call to log_file() because RecordingStream has not been properly initialized"
+            );
             return Ok(());
         };
 
@@ -1257,7 +1372,7 @@ impl RecordingStream {
                     let tick = inner
                         .tick
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    now.insert(Timeline::log_tick(), TimeInt::new_temporal(tick));
+                    now.insert_cell(TimelineName::log_tick(), TimeCell::from_sequence(tick));
 
                     now
                 })
@@ -1333,6 +1448,7 @@ fn forwarding_thread(
             }
             Command::SwapSink(new_sink) => {
                 re_log::trace!("Swapping sink…");
+
                 let backlog = {
                     // Capture the backlog if it exists.
                     let backlog = sink.drain_backlog();
@@ -1497,11 +1613,11 @@ impl RecordingStream {
                 // thread…
                 let mut now = self.now();
                 // …and then also inject the current recording tick into it.
-                now.insert(Timeline::log_tick(), TimeInt::new_temporal(tick));
+                now.insert_cell(TimelineName::log_tick(), TimeCell::from_sequence(tick));
 
                 // Inject all these times into the row, overriding conflicting times, if any.
-                for (timeline, time) in now {
-                    row.timepoint.insert(timeline, time);
+                for (timeline, cell) in now {
+                    row.timepoint.insert_cell(timeline, cell);
                 }
             }
 
@@ -1525,7 +1641,8 @@ impl RecordingStream {
             // Inject the log time
             {
                 let time_timeline = Timeline::log_time();
-                let time = TimeInt::new_temporal(Time::now().nanos_since_epoch());
+                let time =
+                    TimeInt::new_temporal(re_log_types::Timestamp::now().nanos_since_epoch());
 
                 let repeated_time = std::iter::repeat(time.as_i64())
                     .take(chunk.num_rows())
@@ -1572,10 +1689,20 @@ impl RecordingStream {
         }
     }
 
-    /// Records a single [`Chunk`].
+    /// Logs multiple [`Chunk`]s.
     ///
     /// This will _not_ inject `log_tick` and `log_time` timeline columns into the chunk,
-    /// for that use [`Self::log_chunk`].
+    /// for that use [`Self::log_chunks`].
+    pub fn log_chunks(&self, chunks: impl IntoIterator<Item = Chunk>) {
+        for chunk in chunks {
+            self.log_chunk(chunk);
+        }
+    }
+
+    /// Records a single [`Chunk`].
+    ///
+    /// Will inject `log_tick` and `log_time` timeline columns into the chunk.
+    /// If you don't want to inject these, use [`Self::send_chunks`] instead.
     #[inline]
     pub fn send_chunk(&self, chunk: Chunk) {
         let f = move |inner: &RecordingStreamInner| {
@@ -1584,6 +1711,16 @@ impl RecordingStream {
 
         if self.with(f).is_none() {
             re_log::warn_once!("Recording disabled - call to send_chunk() ignored");
+        }
+    }
+
+    /// Records multiple [`Chunk`]s.
+    ///
+    /// This will _not_ inject `log_tick` and `log_time` timeline columns into the chunk,
+    /// for that use [`Self::log_chunks`].
+    pub fn send_chunks(&self, chunks: impl IntoIterator<Item = Chunk>) {
+        for chunk in chunks {
+            self.send_chunk(chunk);
         }
     }
 
@@ -1603,7 +1740,9 @@ impl RecordingStream {
     /// cannot be repaired), all pending data in its buffers will be dropped.
     pub fn set_sink(&self, sink: Box<dyn LogSink>) {
         if self.is_forked_child() {
-            re_log::error_once!("Fork detected during set_sink. cleanup_if_forked() should always be called after forking. This is likely a bug in the SDK.");
+            re_log::error_once!(
+                "Fork detected during set_sink. cleanup_if_forked() should always be called after forking. This is likely a bug in the SDK."
+            );
             return;
         }
 
@@ -1640,7 +1779,9 @@ impl RecordingStream {
     /// See [`RecordingStream`] docs for ordering semantics and multithreading guarantees.
     pub fn flush_async(&self) {
         if self.is_forked_child() {
-            re_log::error_once!("Fork detected during flush_async. cleanup_if_forked() should always be called after forking. This is likely a bug in the SDK.");
+            re_log::error_once!(
+                "Fork detected during flush_async. cleanup_if_forked() should always be called after forking. This is likely a bug in the SDK."
+            );
             return;
         }
 
@@ -1672,8 +1813,12 @@ impl RecordingStream {
     ///
     /// See [`RecordingStream`] docs for ordering semantics and multithreading guarantees.
     pub fn flush_blocking(&self) {
+        re_tracing::profile_function!();
+
         if self.is_forked_child() {
-            re_log::error_once!("Fork detected during flush. cleanup_if_forked() should always be called after forking. This is likely a bug in the SDK.");
+            re_log::error_once!(
+                "Fork detected during flush. cleanup_if_forked() should always be called after forking. This is likely a bug in the SDK."
+            );
             return;
         }
 
@@ -1700,6 +1845,26 @@ impl RecordingStream {
 }
 
 impl RecordingStream {
+    /// Stream data to multiple different sinks.
+    ///
+    /// This is semantically the same as calling [`RecordingStream::set_sink`], but the resulting
+    /// [`RecordingStream`] will now stream data to multiple sinks at the same time.
+    ///
+    /// Currently only supports [`GrpcSink`][grpc_sink] and [`FileSink`][file_sink].
+    ///
+    /// [grpc_sink]: crate::sink::GrpcSink
+    /// [file_sink]: crate::sink::FileSink
+    pub fn set_sinks(&self, sinks: impl crate::log_sink::IntoMultiSink) {
+        if forced_sink_path().is_some() {
+            re_log::debug!("Ignored setting new MultiSink since {ENV_FORCE_SAVE} is set");
+            return;
+        }
+
+        let sink = sinks.into_multi_sink();
+
+        self.set_sink(Box::new(sink));
+    }
+
     /// Swaps the underlying sink for a [`crate::log_sink::GrpcSink`] sink pre-configured to use
     /// the specified address.
     ///
@@ -1739,11 +1904,56 @@ impl RecordingStream {
         }
 
         let url: String = url.into();
-        let re_uri::RedapUri::Proxy(endpoint) = re_uri::RedapUri::try_from(url.as_str())? else {
+        let re_uri::RedapUri::Proxy(uri) = url.as_str().parse()? else {
             return Err(RecordingStreamError::NotAProxyEndpoint);
         };
 
-        let sink = crate::log_sink::GrpcSink::new(endpoint, flush_timeout);
+        let sink = crate::log_sink::GrpcSink::new(uri, flush_timeout);
+
+        self.set_sink(Box::new(sink));
+        Ok(())
+    }
+
+    #[cfg(feature = "server")]
+    /// Swaps the underlying sink for a [`crate::grpc_server::GrpcServerSink`] pre-configured to listen on
+    /// `rerun+http://127.0.0.1:9876/proxy`.
+    ///
+    /// To configure the gRPC server's IP and port, use [`Self::serve_grpc_opts`] instead.
+    ///
+    /// You can connect a viewer to it with `rerun --connect`.
+    ///
+    /// The gRPC server will buffer all log data in memory so that late connecting viewers will get all the data.
+    /// You can limit the amount of data buffered by the gRPC server with the `server_memory_limit` argument.
+    /// Once reached, the earliest logged data will be dropped. Static data is never dropped.
+    pub fn serve_grpc(
+        &self,
+        server_memory_limit: re_memory::MemoryLimit,
+    ) -> RecordingStreamResult<()> {
+        self.serve_grpc_opts("0.0.0.0", crate::DEFAULT_SERVER_PORT, server_memory_limit)
+    }
+
+    #[cfg(feature = "server")]
+    /// Swaps the underlying sink for a [`crate::grpc_server::GrpcServerSink`] pre-configured to listen on
+    /// `rerun+http://{bind_ip}:{port}/proxy`.
+    ///
+    /// `0.0.0.0` is a good default for `bind_ip`.
+    ///
+    /// The gRPC server will buffer all log data in memory so that late connecting viewers will get all the data.
+    /// You can limit the amount of data buffered by the gRPC server with the `server_memory_limit` argument.
+    /// Once reached, the earliest logged data will be dropped. Static data is never dropped.
+    pub fn serve_grpc_opts(
+        &self,
+        bind_ip: impl AsRef<str>,
+        port: u16,
+        server_memory_limit: re_memory::MemoryLimit,
+    ) -> RecordingStreamResult<()> {
+        if forced_sink_path().is_some() {
+            re_log::debug!("Ignored setting GrpcServerSink since {ENV_FORCE_SAVE} is set");
+            return Ok(());
+        }
+
+        let sink =
+            crate::grpc_server::GrpcServerSink::new(bind_ip.as_ref(), port, server_memory_limit)?;
 
         self.set_sink(Box::new(sink));
         Ok(())
@@ -1826,10 +2036,10 @@ impl RecordingStream {
     /// This is a convenience wrapper for [`Self::set_sink`] that upholds the same guarantees in
     /// terms of data durability and ordering.
     /// See [`Self::set_sink`] for more information.
-    pub fn binary_stream(&self) -> Result<BinaryStreamStorage, crate::sink::BinaryStreamSinkError> {
-        let (sink, storage) = crate::sink::BinaryStreamSink::new(self.clone())?;
+    pub fn binary_stream(&self) -> BinaryStreamStorage {
+        let (sink, storage) = crate::sink::BinaryStreamSink::new(self.clone());
         self.set_sink(Box::new(sink));
-        Ok(storage)
+        storage
     }
 
     /// Swaps the underlying sink for a [`crate::sink::FileSink`] at the specified `path`.
@@ -1967,6 +2177,7 @@ impl fmt::Debug for RecordingStream {
                 // This pattern match prevents _accidentally_ omitting data from the debug output
                 // when new fields are added.
                 info,
+                properties,
                 tick,
                 cmds_tx: _,
                 batcher: _,
@@ -1977,6 +2188,7 @@ impl fmt::Debug for RecordingStream {
 
             f.debug_struct("RecordingStream")
                 .field("info", &info)
+                .field("properties", &properties)
                 .field("tick", &tick)
                 .field("pending_dataloaders", &dataloader_handles.lock().len())
                 .field("pid_at_creation", &pid_at_creation)
@@ -2004,11 +2216,11 @@ impl ThreadInfo {
         Self::with(|ti| ti.now(rid))
     }
 
-    fn set_thread_time(rid: &StoreId, timeline: Timeline, time_int: TimeInt) {
-        Self::with(|ti| ti.set_time(rid, timeline, time_int));
+    fn set_thread_time(rid: &StoreId, timeline: TimelineName, cell: TimeCell) {
+        Self::with(|ti| ti.set_time(rid, timeline, cell));
     }
 
-    fn unset_thread_time(rid: &StoreId, timeline: Timeline) {
+    fn unset_thread_time(rid: &StoreId, timeline: &TimelineName) {
         Self::with(|ti| ti.unset_time(rid, timeline));
     }
 
@@ -2032,23 +2244,20 @@ impl ThreadInfo {
 
     fn now(&self, rid: &StoreId) -> TimePoint {
         let mut timepoint = self.timepoints.get(rid).cloned().unwrap_or_default();
-        timepoint.insert(
-            Timeline::log_time(),
-            Time::now().try_into().unwrap_or(TimeInt::MIN),
-        );
+        timepoint.insert_cell(TimelineName::log_time(), TimeCell::timestamp_now());
         timepoint
     }
 
-    fn set_time(&mut self, rid: &StoreId, timeline: Timeline, time_int: TimeInt) {
+    fn set_time(&mut self, rid: &StoreId, timeline: TimelineName, cell: TimeCell) {
         self.timepoints
             .entry(rid.clone())
             .or_default()
-            .insert(timeline, time_int);
+            .insert_cell(timeline, cell);
     }
 
-    fn unset_time(&mut self, rid: &StoreId, timeline: Timeline) {
+    fn unset_time(&mut self, rid: &StoreId, timeline: &TimelineName) {
         if let Some(timepoint) = self.timepoints.get_mut(rid) {
-            timepoint.remove(&timeline);
+            timepoint.remove(timeline);
         }
     }
 
@@ -2074,14 +2283,14 @@ impl RecordingStream {
     /// Set the current time of the recording, for the current calling thread.
     ///
     /// Used for all subsequent logging performed from this same thread, until the next call
-    /// to one of the time setting methods.
+    /// to one of the index/time setting methods.
     ///
     /// There is no requirement of monotonicity. You can move the time backwards if you like.
     ///
     /// See also:
+    /// - [`Self::set_time`]
     /// - [`Self::set_time_sequence`]
-    /// - [`Self::set_time_seconds`]
-    /// - [`Self::set_time_nanos`]
+    /// - [`Self::set_duration_secs`]
     /// - [`Self::disable_timeline`]
     /// - [`Self::reset_time`]
     pub fn set_timepoint(&self, timepoint: impl Into<TimePoint>) {
@@ -2093,14 +2302,55 @@ impl RecordingStream {
         };
 
         if self.with(f).is_none() {
-            re_log::warn_once!("Recording disabled - call to set_time_sequence() ignored");
+            re_log::warn_once!("Recording disabled - call to set_timepoint() ignored");
+        }
+    }
+
+    /// Set the current value of one of the timelines.
+    ///
+    /// Used for all subsequent logging performed from this same thread, until the next call
+    /// to one of the index/time setting methods.
+    ///
+    /// There is no requirement of monotonicity. You can move the time backwards if you like.
+    ///
+    /// Example:
+    /// ```no_run
+    /// # mod rerun { pub use re_sdk::*; }
+    /// # let rec: rerun::RecordingStream = unimplemented!();
+    /// rec.set_time("frame_nr", rerun::TimeCell::from_sequence(42));
+    /// rec.set_time("duration", std::time::Duration::from_millis(123));
+    /// rec.set_time("capture_time", std::time::SystemTime::now());
+    /// ```
+    ///
+    /// See also:
+    /// - [`Self::set_timepoint`]
+    /// - [`Self::set_time_sequence`]
+    /// - [`Self::set_duration_secs`]
+    /// - [`Self::disable_timeline`]
+    /// - [`Self::reset_time`]
+    pub fn set_time(&self, timeline: impl Into<TimelineName>, value: impl TryInto<TimeCell>) {
+        let f = move |inner: &RecordingStreamInner| {
+            let timeline = timeline.into();
+            if let Ok(value) = value.try_into() {
+                ThreadInfo::set_thread_time(&inner.info.store_id, timeline, value);
+            } else {
+                re_log::warn_once!(
+                    "set_time({timeline}): Failed to convert the given value to an TimeCell"
+                );
+            }
+        };
+
+        if self.with(f).is_none() {
+            re_log::warn_once!("Recording disabled - call to set_time() ignored");
         }
     }
 
     /// Set the current time of the recording, for the current calling thread.
     ///
+    /// Short for `set_time(timeline, rerun::TimeCell::from_sequence(sequence))`.
+    ///
     /// Used for all subsequent logging performed from this same thread, until the next call
-    /// to one of the time setting methods.
+    /// to one of the index/time setting methods.
     ///
     /// For example: `rec.set_time_sequence("frame_nr", frame_nr)`.
     /// You can remove a timeline again using `rec.disable_timeline("frame_nr")`.
@@ -2108,43 +2358,108 @@ impl RecordingStream {
     /// There is no requirement of monotonicity. You can move the time backwards if you like.
     ///
     /// See also:
+    /// - [`Self::set_time`]
     /// - [`Self::set_timepoint`]
-    /// - [`Self::set_time_seconds`]
-    /// - [`Self::set_time_nanos`]
+    /// - [`Self::set_duration_secs`]
     /// - [`Self::disable_timeline`]
     /// - [`Self::reset_time`]
+    #[inline]
     pub fn set_time_sequence(&self, timeline: impl Into<TimelineName>, sequence: impl Into<i64>) {
-        let f = move |inner: &RecordingStreamInner| {
-            let sequence = sequence.into();
-            let sequence = if let Ok(seq) = TimeInt::try_from(sequence) {
-                seq
-            } else {
-                re_log::error!(
-                    illegal_value = sequence,
-                    new_value = TimeInt::MIN.as_i64(),
-                    "set_time_sequence() called with illegal value - clamped to minimum legal value"
-                );
-                TimeInt::MIN
-            };
+        self.set_time(timeline, TimeCell::from_sequence(sequence.into()));
+    }
 
-            ThreadInfo::set_thread_time(
-                &inner.info.store_id,
-                Timeline::new(timeline, TimeType::Sequence),
-                sequence,
-            );
-        };
+    /// Set the current time of the recording, for the current calling thread.
+    ///
+    /// Short for `set_time(timeline, std::time::Duration::from_secs_f64(secs))`..
+    ///
+    /// Used for all subsequent logging performed from this same thread, until the next call
+    /// to one of the index/time setting methods.
+    ///
+    /// For example: `rec.set_duration_secs("time_since_start", time_offset)`.
+    /// You can remove a timeline again using `rec.disable_timeline("time_since_start")`.
+    ///
+    /// There is no requirement of monotonicity. You can move the time backwards if you like.
+    ///
+    /// See also:
+    /// - [`Self::set_time`]
+    /// - [`Self::set_timepoint`]
+    /// - [`Self::set_timestamp_secs_since_epoch`]
+    /// - [`Self::set_time_sequence`]
+    /// - [`Self::disable_timeline`]
+    /// - [`Self::reset_time`]
+    #[inline]
+    pub fn set_duration_secs(&self, timeline: impl Into<TimelineName>, secs: impl Into<f64>) {
+        self.set_time(timeline, std::time::Duration::from_secs_f64(secs.into()));
+    }
 
-        if self.with(f).is_none() {
-            re_log::warn_once!("Recording disabled - call to set_time_sequence() ignored");
-        }
+    /// Set a timestamp as seconds since Unix epoch (1970-01-01 00:00:00 UTC).
+    ///
+    /// Short for `self.set_time(timeline, rerun::TimeCell::from_timestamp_secs_since_epoch(secs))`.
+    ///
+    /// Used for all subsequent logging performed from this same thread, until the next call
+    /// to one of the index/time setting methods.
+    ///
+    /// You can remove a timeline again using `rec.disable_timeline(timeline)`.
+    ///
+    /// There is no requirement of monotonicity. You can move the time backwards if you like.
+    ///
+    /// See also:
+    /// - [`Self::set_time`]
+    /// - [`Self::set_timepoint`]
+    /// - [`Self::set_duration_secs`]
+    /// - [`Self::set_time_sequence`]
+    /// - [`Self::set_timestamp_nanos_since_epoch`]
+    /// - [`Self::disable_timeline`]
+    /// - [`Self::reset_time`]
+    #[inline]
+    pub fn set_timestamp_secs_since_epoch(
+        &self,
+        timeline: impl Into<TimelineName>,
+        secs: impl Into<f64>,
+    ) {
+        self.set_time(
+            timeline,
+            TimeCell::from_timestamp_secs_since_epoch(secs.into()),
+        );
+    }
+
+    /// Set a timestamp as nanoseconds since Unix epoch (1970-01-01 00:00:00 UTC).
+    ///
+    /// Short for `self.set_time(timeline, rerun::TimeCell::set_timestamp_nanos_since_epoch(secs))`.
+    ///
+    /// Used for all subsequent logging performed from this same thread, until the next call
+    /// to one of the index/time setting methods.
+    ///
+    /// You can remove a timeline again using `rec.disable_timeline(timeline)`.
+    ///
+    /// There is no requirement of monotonicity. You can move the time backwards if you like.
+    ///
+    /// See also:
+    /// - [`Self::set_time`]
+    /// - [`Self::set_timepoint`]
+    /// - [`Self::set_duration_secs`]
+    /// - [`Self::set_time_sequence`]
+    /// - [`Self::set_timestamp_secs_since_epoch`]
+    /// - [`Self::disable_timeline`]
+    /// - [`Self::reset_time`]
+    #[inline]
+    pub fn set_timestamp_nanos_since_epoch(
+        &self,
+        timeline: impl Into<TimelineName>,
+        nanos: impl Into<i64>,
+    ) {
+        self.set_time(
+            timeline,
+            TimeCell::from_timestamp_nanos_since_epoch(nanos.into()),
+        );
     }
 
     /// Set the current time of the recording, for the current calling thread.
     ///
     /// Used for all subsequent logging performed from this same thread, until the next call
-    /// to one of the time setting methods.
+    /// to one of the index/time setting methods.
     ///
-    /// For example: `rec.set_time_seconds("sim_time", sim_time_secs)`.
+    /// For example: `rec.set_time_secs("sim_time", sim_time_secs)`.
     /// You can remove a timeline again using `rec.disable_timeline("sim_time")`.
     ///
     /// There is no requirement of monotonicity. You can move the time backwards if you like.
@@ -2155,37 +2470,19 @@ impl RecordingStream {
     /// - [`Self::set_time_nanos`]
     /// - [`Self::disable_timeline`]
     /// - [`Self::reset_time`]
-    pub fn set_time_seconds(&self, timeline: impl Into<TimelineName>, seconds: impl Into<f64>) {
-        let f = move |inner: &RecordingStreamInner| {
-            let seconds = seconds.into();
-            let time = Time::from_seconds_since_epoch(seconds);
-            let time = if let Ok(time) = TimeInt::try_from(time) {
-                time
-            } else {
-                re_log::error!(
-                    illegal_value = seconds,
-                    new_value = TimeInt::MIN.as_i64(),
-                    "set_time_seconds() called with illegal value - clamped to minimum legal value"
-                );
-                TimeInt::MIN
-            };
-
-            ThreadInfo::set_thread_time(
-                &inner.info.store_id,
-                Timeline::new(timeline, TimeType::Time),
-                time,
-            );
-        };
-
-        if self.with(f).is_none() {
-            re_log::warn_once!("Recording disabled - call to set_time_seconds() ignored");
-        }
+    #[deprecated(
+        since = "0.23.0",
+        note = "Use either `set_duration_secs` or `set_timestamp_secs_since_epoch` instead"
+    )]
+    #[inline]
+    pub fn set_time_secs(&self, timeline: impl Into<TimelineName>, seconds: impl Into<f64>) {
+        self.set_duration_secs(timeline, seconds);
     }
 
     /// Set the current time of the recording, for the current calling thread.
     ///
     /// Used for all subsequent logging performed from this same thread, until the next call
-    /// to one of the time setting methods.
+    /// to one of the index/time setting methods.
     ///
     /// For example: `rec.set_time_nanos("sim_time", sim_time_nanos)`.
     /// You can remove a timeline again using `rec.disable_timeline("sim_time")`.
@@ -2195,34 +2492,23 @@ impl RecordingStream {
     /// See also:
     /// - [`Self::set_timepoint`]
     /// - [`Self::set_time_sequence`]
-    /// - [`Self::set_time_seconds`]
+    /// - [`Self::set_time_secs`]
     /// - [`Self::disable_timeline`]
     /// - [`Self::reset_time`]
-    pub fn set_time_nanos(&self, timeline: impl Into<TimelineName>, ns: impl Into<i64>) {
-        let f = move |inner: &RecordingStreamInner| {
-            let ns = ns.into();
-            let time = Time::from_ns_since_epoch(ns);
-            let time = if let Ok(time) = TimeInt::try_from(time) {
-                time
-            } else {
-                re_log::error!(
-                    illegal_value = ns,
-                    new_value = TimeInt::MIN.as_i64(),
-                    "set_time_nanos() called with illegal value - clamped to minimum legal value"
-                );
-                TimeInt::MIN
-            };
-
-            ThreadInfo::set_thread_time(
-                &inner.info.store_id,
-                Timeline::new(timeline, TimeType::Time),
-                time,
-            );
-        };
-
-        if self.with(f).is_none() {
-            re_log::warn_once!("Recording disabled - call to set_time_nanos() ignored");
-        }
+    #[deprecated(
+        since = "0.23.0",
+        note = "Use `set_time` with either `rerun::TimeCell::from_duration_nanos` or `rerun::TimeCell::from_timestamp_nanos_since_epoch`, or with `std::time::Duration` or `std::time::SystemTime`."
+    )]
+    #[inline]
+    pub fn set_time_nanos(
+        &self,
+        timeline: impl Into<TimelineName>,
+        nanos_since_epoch: impl Into<i64>,
+    ) {
+        self.set_time(
+            timeline,
+            TimeCell::from_timestamp_nanos_since_epoch(nanos_since_epoch.into()),
+        );
     }
 
     /// Clears out the current time of the recording for the specified timeline, for the
@@ -2233,15 +2519,13 @@ impl RecordingStream {
     /// See also:
     /// - [`Self::set_timepoint`]
     /// - [`Self::set_time_sequence`]
-    /// - [`Self::set_time_seconds`]
+    /// - [`Self::set_time_secs`]
     /// - [`Self::set_time_nanos`]
     /// - [`Self::reset_time`]
     pub fn disable_timeline(&self, timeline: impl Into<TimelineName>) {
         let f = move |inner: &RecordingStreamInner| {
             let timeline = timeline.into();
-            // TODO(#9084): no need to clear two timelines
-            ThreadInfo::unset_thread_time(&inner.info.store_id, Timeline::new_sequence(timeline));
-            ThreadInfo::unset_thread_time(&inner.info.store_id, Timeline::new_temporal(timeline));
+            ThreadInfo::unset_thread_time(&inner.info.store_id, &timeline);
         };
 
         if self.with(f).is_none() {
@@ -2252,14 +2536,14 @@ impl RecordingStream {
     /// Clears out the current time of the recording, for the current calling thread.
     ///
     /// Used for all subsequent logging performed from this same thread, until the next call
-    /// to one of the time setting methods.
+    /// to one of the index/time setting methods.
     ///
     /// For example: `rec.reset_time()`.
     ///
     /// See also:
     /// - [`Self::set_timepoint`]
     /// - [`Self::set_time_sequence`]
-    /// - [`Self::set_time_seconds`]
+    /// - [`Self::set_time_secs`]
     /// - [`Self::set_time_nanos`]
     /// - [`Self::disable_timeline`]
     pub fn reset_time(&self) {
@@ -2277,7 +2561,7 @@ impl RecordingStream {
 
 #[cfg(test)]
 mod tests {
-    use re_log_types::example_components::MyLabel;
+    use re_log_types::example_components::{MyLabel, MyPoints};
 
     use super::*;
 
@@ -2330,8 +2614,34 @@ mod tests {
             _ => panic!("expected SetStoreInfo"),
         }
 
-        // Third message is the batched chunk itself, which was sent as a result of the implicit
-        // flush when swapping the underlying sink from buffered to in-memory.
+        // The following flushes were sent as a result of the implicit flush when swapping the
+        // underlying sink from buffered to in-memory.
+
+        // Chunk that contains the `RecordProperties`.
+        match msgs.pop().unwrap() {
+            LogMsg::ArrowMsg(rid, msg) => {
+                assert_eq!(store_info.store_id, rid);
+
+                let chunk = Chunk::from_arrow_msg(&msg).unwrap();
+
+                chunk.sanity_check().unwrap();
+            }
+            _ => panic!("expected ArrowMsg"),
+        }
+
+        // Another chunk that contains `RecordProperties`.
+        match msgs.pop().unwrap() {
+            LogMsg::ArrowMsg(rid, msg) => {
+                assert_eq!(store_info.store_id, rid);
+
+                let chunk = Chunk::from_arrow_msg(&msg).unwrap();
+
+                chunk.sanity_check().unwrap();
+            }
+            _ => panic!("expected ArrowMsg"),
+        }
+
+        // Final message is the batched chunk itself.
         match msgs.pop().unwrap() {
             LogMsg::ArrowMsg(rid, msg) => {
                 assert_eq!(store_info.store_id, rid);
@@ -2401,9 +2711,12 @@ mod tests {
             _ => panic!("expected ArrowMsg"),
         };
 
-        // 3rd, 4th and 5th messages are all the single-row batched chunks themselves, which were
-        // sent as a result of the implicit flush when swapping the underlying sink from buffered
-        // to in-memory.
+        // 3rd, 4th, 5th, 6th, and 7th messages are all the single-row batched chunks themselves,
+        // which were sent as a result of the implicit flush when swapping the underlying sink
+        // from buffered to in-memory. Note that these messages contain the 2 recording property
+        // chunks.
+        assert_next_row();
+        assert_next_row();
         assert_next_row();
         assert_next_row();
         assert_next_row();
@@ -2455,6 +2768,30 @@ mod tests {
             }
 
             // MemorySinkStorage transparently handles flushing during `take()`!
+
+            // The batch that contains the `RecordingProperties`.
+            match msgs.pop().unwrap() {
+                LogMsg::ArrowMsg(rid, msg) => {
+                    assert_eq!(store_info.store_id, rid);
+
+                    let chunk = Chunk::from_arrow_msg(&msg).unwrap();
+
+                    chunk.sanity_check().unwrap();
+                }
+                _ => panic!("expected ArrowMsg"),
+            }
+
+            // For the same reasons as above, another chunk that contains the `RecordingProperties`.
+            match msgs.pop().unwrap() {
+                LogMsg::ArrowMsg(rid, msg) => {
+                    assert_eq!(store_info.store_id, rid);
+
+                    let chunk = Chunk::from_arrow_msg(&msg).unwrap();
+
+                    chunk.sanity_check().unwrap();
+                }
+                _ => panic!("expected ArrowMsg"),
+            }
 
             // The batched chunk itself, which was sent as a result of the explicit flush above.
             match msgs.pop().unwrap() {
@@ -2514,13 +2851,13 @@ mod tests {
 
     fn example_rows(static_: bool) -> Vec<PendingRow> {
         use re_log_types::example_components::{MyColor, MyLabel, MyPoint};
-        use re_types_core::{Component as _, Loggable};
+        use re_types::Loggable;
 
         let mut tick = 0i64;
         let mut timepoint = |frame_nr: i64| {
             let mut tp = TimePoint::default();
             if !static_ {
-                tp.insert(Timeline::log_time(), Time::now());
+                tp.insert(Timeline::log_time(), re_log_types::Timestamp::now());
                 tp.insert(Timeline::log_tick(), tick);
                 tp.insert(Timeline::new_sequence("frame_nr"), frame_nr);
             }
@@ -2534,7 +2871,7 @@ mod tests {
                 timepoint: timepoint(1),
                 components: [
                     (
-                        MyPoint::descriptor(),
+                        MyPoints::descriptor_points(),
                         <MyPoint as Loggable>::to_arrow([
                             MyPoint::new(10.0, 10.0),
                             MyPoint::new(20.0, 20.0),
@@ -2542,11 +2879,11 @@ mod tests {
                         .unwrap(),
                     ), //
                     (
-                        MyColor::descriptor(),
+                        MyPoints::descriptor_colors(),
                         <MyColor as Loggable>::to_arrow([MyColor(0x8080_80FF)]).unwrap(),
                     ), //
                     (
-                        MyLabel::descriptor(),
+                        MyPoints::descriptor_labels(),
                         <MyLabel as Loggable>::to_arrow([] as [MyLabel; 0]).unwrap(),
                     ), //
                 ]
@@ -2561,15 +2898,15 @@ mod tests {
                 timepoint: timepoint(1),
                 components: [
                     (
-                        MyPoint::descriptor(),
+                        MyPoints::descriptor_points(),
                         <MyPoint as Loggable>::to_arrow([] as [MyPoint; 0]).unwrap(),
                     ), //
                     (
-                        MyColor::descriptor(),
+                        MyPoints::descriptor_colors(),
                         <MyColor as Loggable>::to_arrow([] as [MyColor; 0]).unwrap(),
                     ), //
                     (
-                        MyLabel::descriptor(),
+                        MyPoints::descriptor_labels(),
                         <MyLabel as Loggable>::to_arrow([] as [MyLabel; 0]).unwrap(),
                     ), //
                 ]
@@ -2584,15 +2921,15 @@ mod tests {
                 timepoint: timepoint(1),
                 components: [
                     (
-                        MyPoint::descriptor(),
+                        MyPoints::descriptor_points(),
                         <MyPoint as Loggable>::to_arrow([] as [MyPoint; 0]).unwrap(),
                     ), //
                     (
-                        MyColor::descriptor(),
+                        MyPoints::descriptor_colors(),
                         <MyColor as Loggable>::to_arrow([MyColor(0xFFFF_FFFF)]).unwrap(),
                     ), //
                     (
-                        MyLabel::descriptor(),
+                        MyPoints::descriptor_labels(),
                         <MyLabel as Loggable>::to_arrow([MyLabel("hey".into())]).unwrap(),
                     ), //
                 ]
@@ -2620,8 +2957,13 @@ mod tests {
             .unwrap();
 
         // This call used to *not* compile due to a lack of `?Sized` bounds.
-        use re_types_core::ComponentBatch as _;
-        rec.log("labels", &labels.try_serialized().unwrap())
-            .unwrap();
+        use re_types::ComponentBatch as _;
+        rec.log(
+            "labels",
+            &labels
+                .try_serialized(MyPoints::descriptor_labels())
+                .unwrap(),
+        )
+        .unwrap();
     }
 }

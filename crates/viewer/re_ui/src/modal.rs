@@ -1,6 +1,7 @@
-use eframe::emath::NumExt;
+use eframe::emath::NumExt as _;
+use egui::{Frame, ModalResponse};
 
-use crate::{DesignTokens, UiExt as _};
+use crate::{DesignTokens, UiExt as _, context_ext::ContextExt as _};
 
 /// Helper object to handle a [`ModalWrapper`] window.
 ///
@@ -18,7 +19,7 @@ use crate::{DesignTokens, UiExt as _};
 ///     modal_handler.open();
 /// }
 ///
-/// modal_handler.ui(ui.ctx(), || ModalWrapper::new("Modal Window"), |ui, _| {
+/// modal_handler.ui(ui.ctx(), || ModalWrapper::new("Modal Window"), |ui| {
 ///     ui.label("Modal content");
 /// });
 /// # });
@@ -40,7 +41,7 @@ impl ModalHandler {
         &mut self,
         ctx: &egui::Context,
         make_modal: impl FnOnce() -> ModalWrapper,
-        content_ui: impl FnOnce(&mut egui::Ui, &mut bool) -> R,
+        content_ui: impl FnOnce(&mut egui::Ui) -> R,
     ) -> Option<R> {
         if self.modal.is_none() && self.should_open {
             self.modal = Some(make_modal());
@@ -48,26 +49,17 @@ impl ModalHandler {
         }
 
         if let Some(modal) = &mut self.modal {
-            let ModalWrapperResponse { inner, open } = modal.ui(ctx, content_ui);
+            let response = modal.ui(ctx, content_ui);
 
-            if !open {
+            if response.should_close() {
                 self.modal = None;
             }
 
-            Some(inner)
+            Some(response.inner)
         } else {
             None
         }
     }
-}
-
-/// Response returned by [`ModalWrapper::ui`].
-pub struct ModalWrapperResponse<R> {
-    /// What the content closure returned if it was actually run.
-    pub inner: R,
-
-    /// Whether the modal should remain open.
-    pub open: bool,
 }
 
 /// Show a modal window with Rerun style using [`egui::Modal`].
@@ -85,6 +77,7 @@ pub struct ModalWrapper {
     min_height: Option<f32>,
     default_height: Option<f32>,
     full_span_content: bool,
+    set_side_margins: bool,
     scrollable: egui::Vec2b,
 }
 
@@ -97,6 +90,7 @@ impl ModalWrapper {
             min_height: None,
             default_height: None,
             full_span_content: false,
+            set_side_margins: true,
             scrollable: false.into(),
         }
     }
@@ -135,6 +129,17 @@ impl ModalWrapper {
         self
     }
 
+    /// Configure whether the side margin should be set.
+    ///
+    /// In general, the side margin should be set for a better layout. It may be useful to not set
+    /// them if the client code wants to setup a custom scroll area, which should be outside of the
+    /// side margins.
+    #[inline]
+    pub fn set_side_margin(mut self, set_side_margins: bool) -> Self {
+        self.set_side_margins = set_side_margins;
+        self
+    }
+
     /// Enclose the contents in a scroll area.
     #[inline]
     pub fn scrollable(mut self, scrollable: impl Into<egui::Vec2b>) -> Self {
@@ -148,11 +153,10 @@ impl ModalWrapper {
     pub fn ui<R>(
         &self,
         ctx: &egui::Context,
-        content_ui: impl FnOnce(&mut egui::Ui, &mut bool) -> R,
-    ) -> ModalWrapperResponse<R> {
+        content_ui: impl FnOnce(&mut egui::Ui) -> R,
+    ) -> ModalResponse<R> {
+        let tokens = ctx.tokens();
         let id = egui::Id::new(&self.title);
-
-        let mut open = true;
 
         let mut area = egui::Modal::default_area(id);
         if let Some(default_height) = self.default_height {
@@ -160,115 +164,122 @@ impl ModalWrapper {
         }
 
         let modal_response = egui::Modal::new(id.with("modal"))
-            .frame(egui::Frame {
-                fill: ctx.style().visuals.panel_fill,
-                ..Default::default()
-            })
+            .frame(Frame::new())
             .area(area)
             .show(ctx, |ui| {
-                ui.set_clip_rect(ui.max_rect());
-
-                let item_spacing_y = ui.spacing().item_spacing.y;
-                ui.spacing_mut().item_spacing.y = 0.0;
-
-                if let Some(min_width) = self.min_width {
-                    ui.set_min_width(min_width);
+                prevent_shrinking(ui);
+                egui::Frame {
+                    fill: ctx.style().visuals.panel_fill,
+                    ..Default::default()
                 }
-
-                if let Some(min_height) = self.min_height {
-                    ui.set_min_height(min_height);
-                }
-
-                //
-                // Title bar
-                //
-
-                view_padding_frame(&ViewPaddingFrameParams {
-                    left_and_right: true,
-                    top: true,
-                    bottom: false,
-                })
                 .show(ui, |ui| {
-                    Self::title_bar(ui, &self.title, &mut open);
-                    ui.add_space(DesignTokens::view_padding() as f32);
-                    ui.full_span_separator();
-                });
+                    ui.set_clip_rect(ui.max_rect());
 
-                //
-                // Inner content
-                //
+                    let item_spacing_y = ui.spacing().item_spacing.y;
+                    ui.spacing_mut().item_spacing.y = 0.0;
 
-                let wrapped_content_ui = |ui: &mut egui::Ui, open: &mut bool| -> R {
-                    // We always have side margin, but these must happen _inside_ the scroll area
-                    // (if any). Otherwise, the scroll bar is not snug with the right border and
-                    // may interfere with the action buttons of `ListItem`s.
-                    view_padding_frame(&ViewPaddingFrameParams {
-                        left_and_right: true,
-                        top: false,
-                        bottom: false,
-                    })
+                    if let Some(min_width) = self.min_width {
+                        ui.set_min_width(min_width);
+                    }
+
+                    if let Some(min_height) = self.min_height {
+                        ui.set_min_height(min_height);
+                    }
+
+                    //
+                    // Title bar
+                    //
+
+                    view_padding_frame(
+                        tokens,
+                        &ViewPaddingFrameParams {
+                            left_and_right: true,
+                            top: true,
+                            bottom: false,
+                        },
+                    )
                     .show(ui, |ui| {
-                        if self.full_span_content {
-                            // no further spacing for the content UI
-                            content_ui(ui, open)
-                        } else {
-                            // we must restore vertical spacing and add view padding at the bottom
-                            ui.add_space(item_spacing_y);
+                        Self::title_bar(ui, &self.title);
+                        ui.add_space(tokens.view_padding() as f32);
+                        ui.full_span_separator();
+                    });
 
-                            view_padding_frame(&ViewPaddingFrameParams {
-                                left_and_right: false,
+                    //
+                    // Inner content
+                    //
+
+                    let wrapped_content_ui = |ui: &mut egui::Ui| -> R {
+                        // We always have side margin, but these must happen _inside_ the scroll area
+                        // (if any). Otherwise, the scroll bar is not snug with the right border and
+                        // may interfere with the action buttons of `ListItem`s.
+                        view_padding_frame(
+                            tokens,
+                            &ViewPaddingFrameParams {
+                                left_and_right: self.set_side_margins,
                                 top: false,
-                                bottom: true,
-                            })
-                            .show(ui, |ui| {
-                                ui.spacing_mut().item_spacing.y = item_spacing_y;
-                                content_ui(ui, open)
-                            })
-                            .inner
-                        }
-                    })
-                    .inner
-                };
-
-                //
-                // Optional scroll area
-                //
-
-                if self.scrollable.any() {
-                    // Make the modal size less jumpy and work around https://github.com/emilk/egui/issues/5138
-                    let max_height = 0.85 * ui.ctx().screen_rect().height();
-                    let min_height = 0.3 * ui.ctx().screen_rect().height().at_most(max_height);
-
-                    egui::ScrollArea::new(self.scrollable)
-                        .min_scrolled_height(max_height)
-                        .max_height(max_height)
+                                bottom: false,
+                            },
+                        )
                         .show(ui, |ui| {
-                            let res = wrapped_content_ui(ui, &mut open);
+                            if self.full_span_content {
+                                // no further spacing for the content UI
+                                content_ui(ui)
+                            } else {
+                                // we must restore vertical spacing and add view padding at the bottom
+                                ui.add_space(item_spacing_y);
 
-                            if ui.min_rect().height() < min_height {
-                                ui.add_space(min_height - ui.min_rect().height());
+                                view_padding_frame(
+                                    tokens,
+                                    &ViewPaddingFrameParams {
+                                        left_and_right: false,
+                                        top: false,
+                                        bottom: true,
+                                    },
+                                )
+                                .show(ui, |ui| {
+                                    ui.spacing_mut().item_spacing.y = item_spacing_y;
+                                    content_ui(ui)
+                                })
+                                .inner
                             }
-
-                            res
                         })
                         .inner
-                } else {
-                    wrapped_content_ui(ui, &mut open)
-                }
+                    };
+
+                    //
+                    // Optional scroll area
+                    //
+
+                    if self.scrollable.any() {
+                        // Make the modal size less jumpy and work around https://github.com/emilk/egui/issues/5138
+                        let max_height = 0.85 * ui.ctx().screen_rect().height();
+                        let min_height = 0.3 * ui.ctx().screen_rect().height().at_most(max_height);
+
+                        egui::ScrollArea::new(self.scrollable)
+                            .min_scrolled_height(max_height)
+                            .max_height(max_height)
+                            .show(ui, |ui| {
+                                let res = wrapped_content_ui(ui);
+
+                                if ui.min_rect().height() < min_height {
+                                    ui.add_space(min_height - ui.min_rect().height());
+                                }
+
+                                res
+                            })
+                            .inner
+                    } else {
+                        wrapped_content_ui(ui)
+                    }
+                })
+                .inner
             });
 
-        if modal_response.should_close() {
-            open = false;
-        }
-
-        ModalWrapperResponse {
-            inner: modal_response.inner,
-            open,
-        }
+        modal_response
     }
 
     /// Display a title bar in our own style.
-    fn title_bar(ui: &mut egui::Ui, title: &str, open: &mut bool) {
+    fn title_bar(ui: &mut egui::Ui, title: &str) {
         ui.horizontal(|ui| {
             ui.strong(title);
 
@@ -279,8 +290,11 @@ impl ModalWrapper {
                     .max_rect(ui.max_rect())
                     .layout(egui::Layout::right_to_left(egui::Align::Center)),
             );
-            if ui.small_icon_button(&crate::icons::CLOSE).clicked() {
-                *open = false;
+            if ui
+                .small_icon_button(&crate::icons::CLOSE, "Close")
+                .clicked()
+            {
+                ui.close();
             }
         });
     }
@@ -294,7 +308,7 @@ struct ViewPaddingFrameParams {
 
 /// Utility to produce a [`egui::Frame`] with padding on some sides.
 #[inline]
-fn view_padding_frame(params: &ViewPaddingFrameParams) -> egui::Frame {
+fn view_padding_frame(tokens: &DesignTokens, params: &ViewPaddingFrameParams) -> egui::Frame {
     let ViewPaddingFrameParams {
         left_and_right,
         top,
@@ -303,22 +317,43 @@ fn view_padding_frame(params: &ViewPaddingFrameParams) -> egui::Frame {
     egui::Frame {
         inner_margin: egui::Margin {
             left: if left_and_right {
-                DesignTokens::view_padding()
+                tokens.view_padding()
             } else {
                 0
             },
             right: if left_and_right {
-                DesignTokens::view_padding()
+                tokens.view_padding()
             } else {
                 0
             },
-            top: if top { DesignTokens::view_padding() } else { 0 },
-            bottom: if bottom {
-                DesignTokens::view_padding()
-            } else {
-                0
-            },
+            top: if top { tokens.view_padding() } else { 0 },
+            bottom: if bottom { tokens.view_padding() } else { 0 },
         },
         ..Default::default()
+    }
+}
+
+/// Prevent a UI from shrinking if the content size changes.
+///
+/// Should be called at the beginning of the [`egui::Ui`], before any other content is added.
+/// Will reset if the screen size changes.
+pub fn prevent_shrinking(ui: &mut egui::Ui) {
+    // The Uis response at this point will conveniently contain last frame's rect
+    let last_rect = ui.response().rect;
+
+    let screen_size = ui.ctx().screen_rect().size();
+
+    let id = ui.id().with("prevent_shrinking");
+    let screen_size_changed = ui.data_mut(|d| {
+        let last_screen_size = d.get_temp_mut_or_insert_with(id, || screen_size);
+        let changed = *last_screen_size != screen_size;
+        *last_screen_size = screen_size;
+        changed
+    });
+
+    if last_rect.is_positive() && !screen_size_changed {
+        let min_size = ui.min_size();
+        // Set the min size, respecting the current min size.
+        ui.set_min_size(egui::Vec2::max(last_rect.size(), min_size));
     }
 }

@@ -1,10 +1,13 @@
 use ahash::HashMap;
 use indexmap::IndexMap;
+use itertools::Itertools as _;
 use parking_lot::Mutex;
 
-use crate::{global_context::resolve_mono_instance_path_item, ViewerContext};
 use re_entity_db::EntityPath;
+use re_global_context::{ViewId, resolve_mono_instance_path_item};
 use re_log_types::StoreKind;
+
+use crate::ViewerContext;
 
 use super::Item;
 
@@ -114,13 +117,29 @@ impl From<Item> for ItemCollection {
     }
 }
 
-impl<T> From<T> for ItemCollection
-where
-    T: Iterator<Item = (Item, Option<ItemContext>)>,
-{
-    #[inline]
-    fn from(value: T) -> Self {
-        Self(value.collect())
+impl ItemCollection {
+    pub fn from_items_and_context(
+        items: impl IntoIterator<Item = (Item, Option<ItemContext>)>,
+    ) -> Self {
+        Self(items.into_iter().collect())
+    }
+
+    /// Is this view the selected one (and no other)?
+    pub fn is_view_the_only_selected(&self, needle: &ViewId) -> bool {
+        let mut is_selected = false;
+        for item in self.iter_items() {
+            let item_is_view = match item {
+                Item::View(id) | Item::DataResult(id, _) => id == needle,
+                _ => false,
+            };
+
+            if item_is_view {
+                is_selected = true;
+            } else {
+                return false; // More than one view selected
+            }
+        }
+        is_selected
     }
 }
 
@@ -229,6 +248,105 @@ impl ItemCollection {
     pub fn extend(&mut self, other: impl IntoIterator<Item = (Item, Option<ItemContext>)>) {
         self.0.extend(other);
     }
+
+    /// Tries to copy a description of the selection to the clipboard.
+    ///
+    /// Only certain elements are copyable right now.
+    pub fn copy_to_clipboard(&self, egui_ctx: &egui::Context) {
+        if self.is_empty() {
+            return;
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        enum ClipboardTextDesc {
+            FilePath,
+            Url,
+            AppId,
+            StoreId,
+            EntityPath,
+        }
+
+        #[allow(clippy::match_same_arms)]
+        let clipboard_texts_per_type = self
+            .iter()
+            .filter_map(|(item, _)| match item {
+                Item::Container(_) => None,
+                Item::View(_) => None,
+                // TODO(lucasmerlin): Should these be copyable as URLs?
+                Item::RedapServer(_) => None,
+                Item::RedapEntry(_) => None,
+                Item::TableId(_) => None, // TODO(grtlr): Make `TableId`s copyable too
+
+                Item::DataSource(source) => match source {
+                    re_smart_channel::SmartChannelSource::File(path) => {
+                        Some((ClipboardTextDesc::FilePath, path.to_string_lossy().into()))
+                    }
+                    re_smart_channel::SmartChannelSource::RrdHttpStream { url, follow: _ } => {
+                        Some((ClipboardTextDesc::Url, url.clone()))
+                    }
+                    re_smart_channel::SmartChannelSource::RrdWebEventListener => None,
+                    re_smart_channel::SmartChannelSource::JsChannel { .. } => None,
+                    re_smart_channel::SmartChannelSource::Sdk => None,
+                    re_smart_channel::SmartChannelSource::Stdin => None,
+                    re_smart_channel::SmartChannelSource::RedapGrpcStream { uri, .. } => {
+                        Some((ClipboardTextDesc::Url, uri.to_string()))
+                    }
+                    re_smart_channel::SmartChannelSource::MessageProxy(uri) => {
+                        Some((ClipboardTextDesc::Url, uri.to_string()))
+                    }
+                },
+
+                Item::AppId(id) => Some((ClipboardTextDesc::AppId, id.to_string())),
+                Item::StoreId(id) => Some((ClipboardTextDesc::StoreId, id.to_string())),
+
+                Item::DataResult(_, instance_path) | Item::InstancePath(instance_path) => Some((
+                    ClipboardTextDesc::EntityPath,
+                    instance_path.entity_path.to_string(),
+                )),
+                Item::ComponentPath(component_path) => Some((
+                    ClipboardTextDesc::EntityPath,
+                    component_path.entity_path.to_string(),
+                )),
+            })
+            .chunk_by(|(desc, _)| *desc);
+
+        let mut clipboard_text = String::new();
+        let mut content_description = String::new();
+
+        for (desc, entries) in &clipboard_texts_per_type {
+            let entries = entries.map(|(_, text)| text).collect_vec();
+
+            let desc = match desc {
+                ClipboardTextDesc::FilePath => "file path",
+                ClipboardTextDesc::Url => "URL",
+                ClipboardTextDesc::AppId => "app id",
+                ClipboardTextDesc::StoreId => "store id",
+                ClipboardTextDesc::EntityPath => "entity path",
+            };
+            if !content_description.is_empty() {
+                content_description.push_str(", ");
+            }
+            if entries.len() == 1 {
+                content_description.push_str(desc);
+            } else {
+                content_description.push_str(&format!("{desc}s"));
+            }
+
+            let texts = entries.into_iter().join("\n");
+            if !clipboard_text.is_empty() {
+                clipboard_text.push('\n');
+            }
+            clipboard_text.push_str(&texts);
+        }
+
+        if !clipboard_text.is_empty() {
+            re_log::info!(
+                "Copied {content_description} to clipboard:\n{}",
+                &clipboard_text
+            );
+            egui_ctx.copy_text(clipboard_text);
+        }
+    }
 }
 
 /// Selection and hover state.
@@ -254,13 +372,18 @@ pub struct ApplicationSelectionState {
     hovered_this_frame: Mutex<ItemCollection>,
 }
 
+pub enum SelectionChange<'a> {
+    NoChange,
+    SelectionChanged(&'a ItemCollection),
+}
+
 impl ApplicationSelectionState {
-    /// Called at the start of each frame
+    /// Called at the start of each frame.
     pub fn on_frame_start(
         &mut self,
         item_retain_condition: impl Fn(&Item) -> bool,
         fallback_selection: Option<Item>,
-    ) {
+    ) -> SelectionChange<'_> {
         // Use a different name so we don't get a collision in puffin.
         re_tracing::profile_scope!("SelectionState::on_frame_start");
 
@@ -279,6 +402,10 @@ impl ApplicationSelectionState {
         // Selection in contrast, is sticky!
         if selection_this_frame != &self.selection_previous_frame {
             self.selection_previous_frame = selection_this_frame.clone();
+
+            SelectionChange::SelectionChanged(&*selection_this_frame)
+        } else {
+            SelectionChange::NoChange
         }
     }
 
@@ -376,17 +503,23 @@ impl ApplicationSelectionState {
             .iter_items()
             .any(|current| match current {
                 Item::AppId(_)
+                | Item::TableId(_)
                 | Item::DataSource(_)
                 | Item::StoreId(_)
                 | Item::View(_)
-                | Item::Container(_) => current == test,
+                | Item::Container(_)
+                | Item::RedapEntry(_)
+                | Item::RedapServer(_) => current == test,
 
                 Item::ComponentPath(component_path) => match test {
                     Item::AppId(_)
+                    | Item::TableId(_)
                     | Item::DataSource(_)
                     | Item::StoreId(_)
                     | Item::View(_)
-                    | Item::Container(_) => false,
+                    | Item::Container(_)
+                    | Item::RedapEntry(_)
+                    | Item::RedapServer(_) => false,
 
                     Item::ComponentPath(test_component_path) => {
                         test_component_path == component_path
@@ -403,11 +536,14 @@ impl ApplicationSelectionState {
 
                 Item::InstancePath(current_instance_path) => match test {
                     Item::AppId(_)
+                    | Item::TableId(_)
                     | Item::DataSource(_)
                     | Item::StoreId(_)
                     | Item::ComponentPath(_)
                     | Item::View(_)
-                    | Item::Container(_) => false,
+                    | Item::Container(_)
+                    | Item::RedapEntry(_)
+                    | Item::RedapServer(_) => false,
 
                     Item::InstancePath(test_instance_path)
                     | Item::DataResult(_, test_instance_path) => {
@@ -421,11 +557,14 @@ impl ApplicationSelectionState {
 
                 Item::DataResult(_current_view_id, current_instance_path) => match test {
                     Item::AppId(_)
+                    | Item::TableId(_)
                     | Item::DataSource(_)
                     | Item::StoreId(_)
                     | Item::ComponentPath(_)
                     | Item::View(_)
-                    | Item::Container(_) => false,
+                    | Item::Container(_)
+                    | Item::RedapEntry(_)
+                    | Item::RedapServer(_) => false,
 
                     Item::InstancePath(test_instance_path)
                     | Item::DataResult(_, test_instance_path) => {

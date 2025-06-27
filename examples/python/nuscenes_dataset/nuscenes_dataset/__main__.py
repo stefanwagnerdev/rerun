@@ -84,7 +84,7 @@ def nuscene_sensor_names(nusc: nuscenes.NuScenes, scene_name: str) -> list[str]:
         "CAM_BACK": 4,
         "CAM_BACK_LEFT": 5,
     }
-    return sorted(list(sensor_names), key=lambda sensor_name: ordering.get(sensor_name, float("inf")))
+    return sorted(sensor_names, key=lambda sensor_name: ordering.get(sensor_name, float("inf")))
 
 
 def log_nuscenes(nusc: nuscenes.NuScenes, scene_name: str, max_time_sec: float) -> None:
@@ -123,7 +123,10 @@ def log_nuscenes(nusc: nuscenes.NuScenes, scene_name: str, max_time_sec: float) 
 
 
 def log_lidar_and_ego_pose(
-    location: str, first_lidar_token: str, nusc: nuscenes.NuScenes, max_timestamp_us: float
+    location: str,
+    first_lidar_token: str,
+    nusc: nuscenes.NuScenes,
+    max_timestamp_us: float,
 ) -> None:
     """Log lidar data and vehicle pose."""
     current_lidar_token = first_lidar_token
@@ -138,7 +141,7 @@ def log_lidar_and_ego_pose(
             break
 
         # timestamps are in microseconds
-        rr.set_time_seconds("timestamp", sample_data["timestamp"] * 1e-6)
+        rr.set_time("timestamp", timestamp=sample_data["timestamp"] * 1e-6)
 
         ego_pose = nusc.get("ego_pose", sample_data["ego_pose_token"])
         rotation_xyzw = np.roll(ego_pose["rotation"], shift=-1)  # go from wxyz to xyzw
@@ -151,7 +154,7 @@ def log_lidar_and_ego_pose(
                 translation=ego_pose["translation"],
                 rotation=rr.Quaternion(xyzw=rotation_xyzw),
                 axis_length=10.0,  # The length of the visualized axis.
-                from_parent=False,
+                relation=rr.TransformRelation.ParentFromChild,
             ),
             rr.GeoPoints(lat_lon=position_lat_lon, radii=rr.Radius.ui_points(8.0), colors=0xFF0000FF),
         )
@@ -182,7 +185,7 @@ def log_cameras(first_camera_tokens: list[str], nusc: nuscenes.NuScenes, max_tim
             if max_timestamp_us < sample_data["timestamp"]:
                 break
             sensor_name = sample_data["channel"]
-            rr.set_time_seconds("timestamp", sample_data["timestamp"] * 1e-6)
+            rr.set_time("timestamp", timestamp=sample_data["timestamp"] * 1e-6)
             data_file_path = nusc.dataroot / sample_data["filename"]
             rr.log(f"world/ego_vehicle/{sensor_name}", rr.EncodedImage(path=data_file_path))
             current_camera_token = sample_data["next"]
@@ -197,7 +200,7 @@ def log_radars(first_radar_tokens: list[str], nusc: nuscenes.NuScenes, max_times
             if max_timestamp_us < sample_data["timestamp"]:
                 break
             sensor_name = sample_data["channel"]
-            rr.set_time_seconds("timestamp", sample_data["timestamp"] * 1e-6)
+            rr.set_time("timestamp", timestamp=sample_data["timestamp"] * 1e-6)
             data_file_path = nusc.dataroot / sample_data["filename"]
             pointcloud = nuscenes.RadarPointCloud.from_file(str(data_file_path))
             points = pointcloud.points[:3].T  # shape after transposing: (num_points, 3)
@@ -218,7 +221,7 @@ def log_annotations(location: str, first_sample_token: str, nusc: nuscenes.NuSce
         sample_data = nusc.get("sample", current_sample_token)
         if max_timestamp_us < sample_data["timestamp"]:
             break
-        rr.set_time_seconds("timestamp", sample_data["timestamp"] * 1e-6)
+        rr.set_time("timestamp", timestamp=sample_data["timestamp"] * 1e-6)
         ann_tokens = sample_data["anns"]
         sizes = []
         centers = []
@@ -265,7 +268,7 @@ def log_sensor_calibration(sample_data: dict[str, Any], nusc: nuscenes.NuScenes)
         rr.Transform3D(
             translation=calibrated_sensor["translation"],
             rotation=rr.Quaternion(xyzw=rotation_xyzw),
-            from_parent=False,
+            relation=rr.TransformRelation.ParentFromChild,
         ),
         static=True,
     )
@@ -315,8 +318,7 @@ def main() -> None:
             name=sensor_name,
             origin=f"world/ego_vehicle/{sensor_name}",
             contents=["$origin/**", "world/anns"],
-            # TODO(#6670): Can't specify rr.components.FillMode.MajorWireframe right now, need to use batch type instead.
-            overrides={"world/anns": [rr.components.FillModeBatch("majorwireframe")]},
+            overrides={"world/anns": rr.Boxes3D.from_fields(fill_mode="majorwireframe")},
         )
         for sensor_name in nuscene_sensor_names(nusc, args.scene_name)
     ]
@@ -327,9 +329,8 @@ def main() -> None:
                     name="3D",
                     origin="world",
                     # Set the image plane distance to 5m for all camera visualizations.
-                    defaults=[rr.components.ImagePlaneDistance(5.0)],
-                    # TODO(#6670): Can't specify rr.components.FillMode.MajorWireframe right now, need to use batch type instead.
-                    overrides={"world/anns": [rr.components.FillModeBatch("solid")]},
+                    defaults=[rr.Pinhole.from_fields(image_plane_distance=5.0)],
+                    overrides={"world/anns": rr.Boxes3D.from_fields(fill_mode="solid")},
                 ),
                 rrb.Vertical(
                     rrb.TextDocumentView(origin="description", name="Description"),

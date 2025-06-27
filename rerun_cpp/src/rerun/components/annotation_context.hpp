@@ -4,7 +4,6 @@
 #pragma once
 
 #include "../collection.hpp"
-#include "../component_descriptor.hpp"
 #include "../datatypes/class_description_map_elem.hpp"
 #include "../result.hpp"
 
@@ -27,6 +26,9 @@ namespace rerun::components {
     /// annotation context. We use the *first* annotation context we find in the
     /// path-hierarchy when searching up through the ancestors of a given entity
     /// path.
+    ///
+    /// ⚠ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    ///
     struct AnnotationContext {
         /// List of class descriptions, mapping class indices to class names, colors etc.
         rerun::Collection<rerun::datatypes::ClassDescriptionMapElem> class_map;
@@ -80,7 +82,7 @@ namespace rerun {
     /// \private
     template <>
     struct Loggable<components::AnnotationContext> {
-        static constexpr ComponentDescriptor Descriptor = "rerun.components.AnnotationContext";
+        static constexpr std::string_view ComponentType = "rerun.components.AnnotationContext";
 
         /// Returns the arrow data type this type corresponds to.
         static const std::shared_ptr<arrow::DataType>& arrow_datatype();

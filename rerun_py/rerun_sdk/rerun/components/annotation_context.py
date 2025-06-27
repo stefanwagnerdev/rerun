@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Sequence, Union
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Union
 
 import pyarrow as pa
 from attrs import define, field
@@ -14,7 +15,6 @@ from .. import datatypes
 from .._baseclasses import (
     BaseBatch,
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 from .annotation_context_ext import AnnotationContextExt
@@ -32,11 +32,13 @@ class AnnotationContext(AnnotationContextExt, ComponentMixin):
     annotation context. We use the *first* annotation context we find in the
     path-hierarchy when searching up through the ancestors of a given entity
     path.
+
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
     """
 
     _BATCH_TYPE = None
 
-    def __init__(self: Any, class_map: AnnotationContextLike):
+    def __init__(self: Any, class_map: AnnotationContextLike) -> None:
         """
         Create a new instance of the AnnotationContext component.
 
@@ -132,7 +134,7 @@ class AnnotationContextBatch(BaseBatch[AnnotationContextArrayLike], ComponentBat
             metadata={},
         )
     )
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.AnnotationContext")
+    _COMPONENT_TYPE: str = "rerun.components.AnnotationContext"
 
     @staticmethod
     def _native_to_pa_array(data: AnnotationContextArrayLike, data_type: pa.DataType) -> pa.Array:

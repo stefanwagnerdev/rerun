@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include "../component_descriptor.hpp"
 #include "../datatypes/range1d.hpp"
 #include "../result.hpp"
 
@@ -13,6 +12,9 @@
 
 namespace rerun::components {
     /// **Component**: Range of expected or valid values, specifying a lower and upper bound.
+    ///
+    /// ⚠ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    ///
     struct ValueRange {
         rerun::datatypes::Range1D range;
 
@@ -46,7 +48,7 @@ namespace rerun {
     /// \private
     template <>
     struct Loggable<components::ValueRange> {
-        static constexpr ComponentDescriptor Descriptor = "rerun.components.ValueRange";
+        static constexpr std::string_view ComponentType = "rerun.components.ValueRange";
 
         /// Returns the arrow data type this type corresponds to.
         static const std::shared_ptr<arrow::DataType>& arrow_datatype() {

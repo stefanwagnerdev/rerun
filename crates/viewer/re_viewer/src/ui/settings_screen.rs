@@ -1,7 +1,7 @@
 use egui::{NumExt as _, Ui};
 
-use re_log_types::TimeZone;
-use re_ui::UiExt as _;
+use re_log_types::TimestampFormat;
+use re_ui::{DesignTokens, UiExt as _};
 use re_viewer_context::AppOptions;
 
 pub fn settings_screen_ui(ui: &mut egui::Ui, app_options: &mut AppOptions, keep_open: &mut bool) {
@@ -42,14 +42,17 @@ fn settings_screen_ui_impl(ui: &mut egui::Ui, app_options: &mut AppOptions, keep
             egui::RichText::new("Settings")
                 .strong()
                 .line_height(Some(32.0))
-                .text_style(re_ui::DesignTokens::welcome_screen_h2()),
+                .text_style(DesignTokens::welcome_screen_h2()),
         ));
 
         ui.allocate_ui_with_layout(
             egui::Vec2::X * ui.available_width(),
             egui::Layout::right_to_left(egui::Align::Center),
             |ui| {
-                if ui.small_icon_button(&re_ui::icons::CLOSE).clicked() {
+                if ui
+                    .small_icon_button(&re_ui::icons::CLOSE, "Close")
+                    .clicked()
+                {
                     *keep_open = false;
                 }
             },
@@ -63,6 +66,18 @@ fn settings_screen_ui_impl(ui: &mut egui::Ui, app_options: &mut AppOptions, keep
     separator_with_some_space(ui);
 
     ui.strong("General");
+
+    if cfg!(debug_assertions) {
+        let theme_preference = ui.ctx().options(|opt| opt.theme_preference);
+        // TODO(#3058): finish light node
+        if theme_preference != egui::ThemePreference::Dark {
+            ui.warning_label("Light mode support is experimental!");
+        }
+        ui.horizontal(|ui| {
+            ui.label("Theme:");
+            egui::global_theme_preference_buttons(ui);
+        });
+    }
 
     ui.re_checkbox(
         &mut app_options.include_welcome_screen_button_in_recordings_panel,
@@ -79,13 +94,21 @@ fn settings_screen_ui_impl(ui: &mut egui::Ui, app_options: &mut AppOptions, keep
     separator_with_some_space(ui);
 
     ui.strong("Timezone");
-    ui.re_radio_value(&mut app_options.time_zone, TimeZone::Utc, "UTC")
-        .on_hover_text("Display timestamps in UTC");
-    ui.re_radio_value(&mut app_options.time_zone, TimeZone::Local, "Local")
-        .on_hover_text("Display timestamps in the local timezone");
     ui.re_radio_value(
-        &mut app_options.time_zone,
-        TimeZone::UnixEpoch,
+        &mut app_options.timestamp_format,
+        TimestampFormat::Utc,
+        "UTC",
+    )
+    .on_hover_text("Display timestamps in UTC");
+    ui.re_radio_value(
+        &mut app_options.timestamp_format,
+        TimestampFormat::LocalTimezone,
+        "Local",
+    )
+    .on_hover_text("Display timestamps in the local timezone");
+    ui.re_radio_value(
+        &mut app_options.timestamp_format,
+        TimestampFormat::UnixEpoch,
         "Unix epoch",
     )
     .on_hover_text("Display timestamps in seconds since unix epoch");
@@ -170,7 +193,7 @@ fn video_section_ui(ui: &mut Ui, app_options: &mut AppOptions) {
     // This affects only the web target, so we don't need to show it on native.
     #[cfg(target_arch = "wasm32")]
     {
-        use re_video::decode::DecodeHardwareAcceleration;
+        use re_video::DecodeHardwareAcceleration;
 
         let hardware_acceleration = &mut app_options.video_decoder_hw_acceleration;
         ui.horizontal(|ui| {
@@ -202,7 +225,7 @@ fn video_section_ui(ui: &mut Ui, app_options: &mut AppOptions) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn ffmpeg_path_status_ui(ui: &mut Ui, app_options: &AppOptions) {
-    use re_video::decode::{FFmpegVersion, FFmpegVersionParseError};
+    use re_video::{FFmpegVersion, FFmpegVersionParseError};
     use std::task::Poll;
 
     let path = app_options

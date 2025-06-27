@@ -69,7 +69,7 @@ namespace rerun::archetypes {
     ///     std::vector<float> radii = {0.05f, 0.01f, 0.2f, 0.1f, 0.3f};
     ///
     ///     for (size_t i = 0; i <5; i++) {
-    ///         rec.set_time_seconds("time", 10.0 + static_cast<double>(i));
+    ///         rec.set_time_duration_secs("time", 10.0 + static_cast<double>(i));
     ///         rec.log(
     ///             "points",
     ///             rerun::Points3D(positions[i]).with_colors(colors[i]).with_radii(radii[i])
@@ -109,7 +109,7 @@ namespace rerun::archetypes {
     ///
     ///     // Log at seconds 10-14
     ///     auto times = rerun::Collection{10s, 11s, 12s, 13s, 14s};
-    ///     auto time_column = rerun::TimeColumn::from_times("time", std::move(times));
+    ///     auto time_column = rerun::TimeColumn::from_durations("time", std::move(times));
     ///
     ///     // Partition our data as expected across the 5 timesteps.
     ///     auto position = rerun::Points3D().with_positions(positions).columns({2, 4, 4, 3, 4});
@@ -188,7 +188,10 @@ namespace rerun::archetypes {
         /// Otherwise, each instance will have its own label.
         std::optional<ComponentBatch> labels;
 
-        /// Optional choice of whether the text labels should be shown by default.
+        /// Whether the text labels should be shown.
+        ///
+        /// If not set, labels will automatically appear when there is exactly one label for this entity
+        /// or the number of instances on this entity is under a certain threshold.
         std::optional<ComponentBatch> show_labels;
 
         /// Optional class Ids for the points.
@@ -207,44 +210,43 @@ namespace rerun::archetypes {
         std::optional<ComponentBatch> keypoint_ids;
 
       public:
-        static constexpr const char IndicatorComponentName[] = "rerun.components.Points3DIndicator";
+        static constexpr const char IndicatorComponentType[] = "rerun.components.Points3DIndicator";
 
         /// Indicator component, used to identify the archetype when converting to a list of components.
-        using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentName>;
+        using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentType>;
         /// The name of the archetype as used in `ComponentDescriptor`s.
         static constexpr const char ArchetypeName[] = "rerun.archetypes.Points3D";
 
         /// `ComponentDescriptor` for the `positions` field.
         static constexpr auto Descriptor_positions = ComponentDescriptor(
-            ArchetypeName, "positions",
-            Loggable<rerun::components::Position3D>::Descriptor.component_name
+            ArchetypeName, "Points3D:positions",
+            Loggable<rerun::components::Position3D>::ComponentType
         );
         /// `ComponentDescriptor` for the `radii` field.
         static constexpr auto Descriptor_radii = ComponentDescriptor(
-            ArchetypeName, "radii", Loggable<rerun::components::Radius>::Descriptor.component_name
+            ArchetypeName, "Points3D:radii", Loggable<rerun::components::Radius>::ComponentType
         );
         /// `ComponentDescriptor` for the `colors` field.
         static constexpr auto Descriptor_colors = ComponentDescriptor(
-            ArchetypeName, "colors", Loggable<rerun::components::Color>::Descriptor.component_name
+            ArchetypeName, "Points3D:colors", Loggable<rerun::components::Color>::ComponentType
         );
         /// `ComponentDescriptor` for the `labels` field.
         static constexpr auto Descriptor_labels = ComponentDescriptor(
-            ArchetypeName, "labels", Loggable<rerun::components::Text>::Descriptor.component_name
+            ArchetypeName, "Points3D:labels", Loggable<rerun::components::Text>::ComponentType
         );
         /// `ComponentDescriptor` for the `show_labels` field.
         static constexpr auto Descriptor_show_labels = ComponentDescriptor(
-            ArchetypeName, "show_labels",
-            Loggable<rerun::components::ShowLabels>::Descriptor.component_name
+            ArchetypeName, "Points3D:show_labels",
+            Loggable<rerun::components::ShowLabels>::ComponentType
         );
         /// `ComponentDescriptor` for the `class_ids` field.
         static constexpr auto Descriptor_class_ids = ComponentDescriptor(
-            ArchetypeName, "class_ids",
-            Loggable<rerun::components::ClassId>::Descriptor.component_name
+            ArchetypeName, "Points3D:class_ids", Loggable<rerun::components::ClassId>::ComponentType
         );
         /// `ComponentDescriptor` for the `keypoint_ids` field.
         static constexpr auto Descriptor_keypoint_ids = ComponentDescriptor(
-            ArchetypeName, "keypoint_ids",
-            Loggable<rerun::components::KeypointId>::Descriptor.component_name
+            ArchetypeName, "Points3D:keypoint_ids",
+            Loggable<rerun::components::KeypointId>::ComponentType
         );
 
       public:
@@ -294,7 +296,10 @@ namespace rerun::archetypes {
             return std::move(*this);
         }
 
-        /// Optional choice of whether the text labels should be shown by default.
+        /// Whether the text labels should be shown.
+        ///
+        /// If not set, labels will automatically appear when there is exactly one label for this entity
+        /// or the number of instances on this entity is under a certain threshold.
         Points3D with_show_labels(const rerun::components::ShowLabels& _show_labels) && {
             show_labels = ComponentBatch::from_loggable(_show_labels, Descriptor_show_labels)
                               .value_or_throw();

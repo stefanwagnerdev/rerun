@@ -3,7 +3,7 @@ use arrow::datatypes::Schema as ArrowSchema;
 use re_log_types::EntityPath;
 use re_types_core::ChunkId;
 
-use crate::{ArrowBatchMetadata, SorbetColumnDescriptors, SorbetError};
+use crate::{ArrowBatchMetadata, SorbetColumnDescriptors, SorbetError, TimestampMetadata};
 
 // ----------------------------------------------------------------------------
 
@@ -22,14 +22,20 @@ pub struct SorbetSchema {
     /// Which entity is this chunk for?
     pub entity_path: Option<EntityPath>,
 
+    /// The partition id that this chunk belongs to.
+    pub partition_id: Option<String>,
+
     /// The heap size of this batch in bytes, if known.
     pub heap_size_bytes: Option<u64>,
+
+    /// Timing statistics.
+    pub timestamps: TimestampMetadata,
 }
 
 /// ## Metadata keys for the record batch metadata
 impl SorbetSchema {
     /// The key used to identify the version of the Rerun schema.
-    const METADATA_KEY_VERSION: &'static str = "rerun.version";
+    const METADATA_KEY_VERSION: &'static str = "rerun:version";
 
     /// The version of the Rerun schema.
     const METADATA_VERSION: &'static str = "1";
@@ -43,11 +49,18 @@ impl SorbetSchema {
     }
 
     pub fn chunk_id_metadata(chunk_id: &ChunkId) -> (String, String) {
-        ("rerun.id".to_owned(), format!("{:X}", chunk_id.as_u128()))
+        ("rerun:id".to_owned(), chunk_id.to_string())
     }
 
     pub fn entity_path_metadata(entity_path: &EntityPath) -> (String, String) {
-        ("rerun.entity_path".to_owned(), entity_path.to_string())
+        ("rerun:entity_path".to_owned(), entity_path.to_string())
+    }
+
+    pub fn partition_id_metadata(partition_id: impl AsRef<str>) -> (String, String) {
+        (
+            "rerun:partition_id".to_owned(),
+            partition_id.as_ref().to_owned(),
+        )
     }
 
     pub fn arrow_batch_metadata(&self) -> ArrowBatchMetadata {
@@ -56,6 +69,8 @@ impl SorbetSchema {
             chunk_id,
             entity_path,
             heap_size_bytes,
+            partition_id,
+            timestamps,
         } = self;
 
         [
@@ -65,15 +80,17 @@ impl SorbetSchema {
             )),
             chunk_id.as_ref().map(Self::chunk_id_metadata),
             entity_path.as_ref().map(Self::entity_path_metadata),
+            partition_id.as_ref().map(Self::partition_id_metadata),
             heap_size_bytes.as_ref().map(|heap_size_bytes| {
                 (
-                    "rerun.heap_size_bytes".to_owned(),
+                    "rerun:heap_size_bytes".to_owned(),
                     heap_size_bytes.to_string(),
                 )
             }),
         ]
         .into_iter()
         .flatten()
+        .chain(timestamps.to_metadata())
         .collect()
     }
 }
@@ -94,21 +111,28 @@ impl SorbetSchema {
     }
 }
 
-impl TryFrom<&ArrowSchema> for SorbetSchema {
-    type Error = SorbetError;
+impl SorbetSchema {
+    /// Parse an already migrated Arrow schema.
+    #[tracing::instrument(level = "trace", skip_all)]
+    pub(crate) fn try_from_migrated_arrow_schema(
+        arrow_schema: &ArrowSchema,
+    ) -> Result<Self, SorbetError> {
+        debug_assert!(
+            !arrow_schema.metadata.contains_key("rerun.id"),
+            "The schema should not contain the legacy 'rerun.id' key, because it should have already been migrated to 'rerun:id'."
+        );
 
-    fn try_from(arrow_schema: &ArrowSchema) -> Result<Self, Self::Error> {
         let ArrowSchema { metadata, fields } = arrow_schema;
 
         let entity_path = metadata
-            .get("rerun.entity_path")
+            .get("rerun:entity_path")
             .map(|s| EntityPath::parse_forgiving(s));
 
         let columns = SorbetColumnDescriptors::try_from_arrow_fields(entity_path.as_ref(), fields)?;
 
-        let chunk_id = if let Some(chunk_id_str) = metadata.get("rerun.id") {
+        let chunk_id = if let Some(chunk_id_str) = metadata.get("rerun:id") {
             Some(chunk_id_str.parse().map_err(|err| {
-                SorbetError::custom(format!(
+                SorbetError::ChunkIdDeserializationError(format!(
                     "Failed to deserialize chunk id {chunk_id_str:?}: {err}"
                 ))
             })?)
@@ -116,7 +140,7 @@ impl TryFrom<&ArrowSchema> for SorbetSchema {
             None
         };
 
-        let heap_size_bytes = if let Some(heap_size_bytes) = metadata.get("rerun.heap_size_bytes") {
+        let heap_size_bytes = if let Some(heap_size_bytes) = metadata.get("rerun:heap_size_bytes") {
             heap_size_bytes
                 .parse()
                 .map_err(|err| {
@@ -128,6 +152,8 @@ impl TryFrom<&ArrowSchema> for SorbetSchema {
         } else {
             None
         };
+
+        let partition_id = metadata.get("rerun:partition_id").map(|s| s.to_owned());
 
         // Verify version
         if let Some(batch_version) = metadata.get(Self::METADATA_KEY_VERSION) {
@@ -143,7 +169,9 @@ impl TryFrom<&ArrowSchema> for SorbetSchema {
             columns,
             chunk_id,
             entity_path,
+            partition_id,
             heap_size_bytes,
+            timestamps: TimestampMetadata::parse_record_batch_metadata(metadata),
         })
     }
 }

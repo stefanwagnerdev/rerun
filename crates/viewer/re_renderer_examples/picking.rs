@@ -1,12 +1,12 @@
 //! Demonstrates the dedicated picking layer support.
 
 use itertools::Itertools as _;
-use rand::Rng;
+use rand::Rng as _;
 use re_renderer::{
-    renderer::GpuMeshInstance,
-    view_builder::{Projection, TargetConfiguration, ViewBuilder},
     Color32, GpuReadbackIdentifier, PickingLayerId, PickingLayerInstanceId, PickingLayerProcessor,
     PointCloudBuilder, RectInt, Size,
+    renderer::GpuMeshInstance,
+    view_builder::{Projection, TargetConfiguration, ViewBuilder},
 };
 
 mod framework;
@@ -27,9 +27,9 @@ struct Picking {
 
 fn random_color(rnd: &mut impl rand::Rng) -> Color32 {
     re_renderer::Hsva {
-        h: rnd.gen::<f32>(),
-        s: rnd.gen::<f32>() * 0.5 + 0.5,
-        v: rnd.gen::<f32>() * 0.5 + 0.5,
+        h: rnd.r#gen::<f32>(),
+        s: rnd.r#gen::<f32>() * 0.5 + 0.5,
+        v: rnd.r#gen::<f32>() * 0.5 + 0.5,
         a: 1.0,
     }
     .into()
@@ -126,7 +126,7 @@ impl framework::Example for Picking {
             TargetConfiguration {
                 name: "OutlinesDemo".into(),
                 resolution_in_pixel: resolution,
-                view_from_world: re_math::IsoTransform::look_at_rh(
+                view_from_world: macaw::IsoTransform::look_at_rh(
                     camera_position,
                     glam::Vec3::ZERO,
                     glam::Vec3::Y,

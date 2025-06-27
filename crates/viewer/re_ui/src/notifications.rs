@@ -1,14 +1,11 @@
 use std::time::Duration;
 
 use egui::NumExt as _;
-pub use re_log::Level;
 use time::OffsetDateTime;
 
-use crate::design_tokens;
-use crate::icons;
-use crate::ColorToken;
-use crate::Scale;
-use crate::UiExt;
+pub use re_log::Level;
+
+use crate::{UiExt as _, icons};
 
 fn now() -> OffsetDateTime {
     OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc())
@@ -25,10 +22,10 @@ pub enum NotificationLevel {
 impl NotificationLevel {
     fn color(&self, ui: &egui::Ui) -> egui::Color32 {
         match self {
-            Self::Info => crate::INFO_COLOR,
+            Self::Info => ui.tokens().info_text_color,
             Self::Warning => ui.style().visuals.warn_fg_color,
             Self::Error => ui.style().visuals.error_fg_color,
-            Self::Success => crate::SUCCESS_COLOR,
+            Self::Success => ui.tokens().success_text_color,
         }
     }
 }
@@ -159,8 +156,13 @@ impl NotificationUi {
     }
 
     fn ui(&mut self, egui_ctx: &egui::Context, button_response: &egui::Response) {
-        let is_panel_visible =
-            egui_ctx.memory(|mem| mem.is_popup_open(notification_panel_popup_id()));
+        let is_panel_visible = egui_ctx.memory_mut(|mem| {
+            let is_open = mem.is_popup_open(notification_panel_popup_id());
+            if is_open {
+                mem.keep_popup_open(notification_panel_popup_id());
+            }
+            is_open
+        });
         if is_panel_visible {
             // Dismiss all toasts when opening panel
             self.unread_notification_level = None;
@@ -183,7 +185,7 @@ impl NotificationUi {
             if escape_pressed
                 || button_response.clicked_elsewhere() && panel_response.clicked_elsewhere()
             {
-                egui_ctx.memory_mut(|mem| mem.close_popup());
+                egui_ctx.memory_mut(|mem| mem.close_popup(notification_panel_popup_id()));
             }
         }
 
@@ -216,11 +218,7 @@ impl NotificationPanel {
 
         let notification_list = |ui: &mut egui::Ui| {
             if notifications.is_empty() {
-                ui.label(
-                    design_tokens()
-                        .text("No notifications yet.", ColorToken::gray(Scale::S450))
-                        .weak(),
-                );
+                ui.label(egui::RichText::new("No notifications yet.").weak());
 
                 return;
             }
@@ -241,7 +239,7 @@ impl NotificationPanel {
             .movable(false)
             .show(egui_ctx, |ui| {
                 egui::Frame::window(ui.style())
-                    .fill(design_tokens().color(ColorToken::gray(Scale::S150)))
+                    .fill(ui.tokens().notification_panel_background_color)
                     .corner_radius(8)
                     .inner_margin(8.0)
                     .show(ui, |ui| {
@@ -255,8 +253,10 @@ impl NotificationPanel {
                                 ui.label("Notifications");
                             }
                             ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
-                                if ui.small_icon_button(&icons::CLOSE).clicked() {
-                                    ui.memory_mut(|mem| mem.close_popup());
+                                if ui.small_icon_button(&icons::CLOSE, "Close").clicked() {
+                                    ui.memory_mut(|mem| {
+                                        mem.close_popup(notification_panel_popup_id());
+                                    });
                                 }
                             });
                         });
@@ -368,9 +368,9 @@ fn show_notification(
     mut on_dismiss: impl FnMut(),
 ) -> egui::Response {
     let background_color = if mode == DisplayMode::Toast || notification.is_unread {
-        design_tokens().color(ColorToken::gray(Scale::S200))
+        ui.tokens().notification_background_color
     } else {
-        design_tokens().color(ColorToken::gray(Scale::S150))
+        ui.tokens().notification_panel_background_color
     };
 
     egui::Frame::window(ui.style())
@@ -385,11 +385,7 @@ fn show_notification(
                     ui.horizontal_top(|ui| {
                         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                         ui.set_width(270.0);
-                        ui.label(
-                            design_tokens()
-                                .text(notification.text.clone(), ColorToken::gray(Scale::S775))
-                                .weak(),
-                        );
+                        ui.label(egui::RichText::new(notification.text.clone()));
                     });
 
                     ui.add_space(4.0);
@@ -436,24 +432,14 @@ fn notification_age_label(ui: &mut egui::Ui, notification: &Notification) {
     ui.horizontal_top(|ui| {
         ui.set_min_width(30.0);
         ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
-            ui.label(
-                design_tokens()
-                    .text(formatted, ColorToken::gray(Scale::S450))
-                    .weak(),
-            )
-            .on_hover_text(format!("{}", notification.created_at));
+            ui.label(egui::RichText::new(formatted).weak())
+                .on_hover_text(format!("{}", notification.created_at));
         });
     });
 }
 
 fn log_level_icon(ui: &mut egui::Ui, level: NotificationLevel) {
-    let color = match level {
-        NotificationLevel::Info => crate::INFO_COLOR,
-        NotificationLevel::Warning => ui.style().visuals.warn_fg_color,
-        NotificationLevel::Error => ui.style().visuals.error_fg_color,
-        NotificationLevel::Success => crate::SUCCESS_COLOR,
-    };
-
+    let color = level.color(ui);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
     ui.painter()
         .circle_filled(rect.center() + egui::vec2(0.0, 2.0), 5.0, color);

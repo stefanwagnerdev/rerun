@@ -4,13 +4,13 @@ use std::fmt::Formatter;
 
 use arrow::{
     array::{Array, ArrayRef, ListArray},
-    datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit},
+    datatypes::{DataType, Field, Fields},
     util::display::{ArrayFormatter, FormatOptions},
 };
-use comfy_table::{presets, Cell, Row, Table};
-use itertools::Itertools as _;
+use comfy_table::{Cell, Row, Table, presets};
+use itertools::{Either, Itertools as _};
 
-use re_arrow_util::ArrowArrayDowncastRef as _;
+use re_arrow_util::{ArrowArrayDowncastRef as _, format_data_type};
 use re_tuid::Tuid;
 use re_types_core::Loggable as _;
 
@@ -31,9 +31,21 @@ fn custom_array_formatter<'a>(field: &Field, array: &'a dyn Array) -> CustomArra
     if let Some(extension_name) = field.metadata().get("ARROW:extension:name") {
         // TODO(#1775): This should be registered dynamically.
         if extension_name.as_str() == Tuid::ARROW_EXTENSION_NAME {
-            return Box::new(|index| {
+            // For example: `RowId` is a TUID that should be formatted with a `row_` prefix:
+            let prefix = field
+                .metadata()
+                .get("ARROW:extension:metadata")
+                .and_then(|metadata| serde_json::from_str::<Metadata>(metadata).ok())
+                .and_then(|metadata| {
+                    metadata
+                        .get("namespace")
+                        .map(|namespace| format!("{namespace}_"))
+                })
+                .unwrap_or_default();
+
+            return Box::new(move |index| {
                 if let Some(tuid) = parse_tuid(array, index) {
-                    Ok(format!("{tuid}"))
+                    Ok(format!("{prefix}{tuid}"))
                 } else {
                     Err("Invalid RowId".to_owned())
                 }
@@ -64,143 +76,47 @@ fn parse_tuid(array: &dyn Array, index: usize) -> Option<Tuid> {
 
 // ---
 
-// arrow has `ToString` implemented, but it is way too verbose.
-#[repr(transparent)]
-struct DisplayTimeUnit(TimeUnit);
-
-impl std::fmt::Display for DisplayTimeUnit {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self.0 {
-            TimeUnit::Second => "s",
-            TimeUnit::Millisecond => "ms",
-            TimeUnit::Microsecond => "us",
-            TimeUnit::Nanosecond => "ns",
-        };
-        f.write_str(s)
-    }
-}
-
-// arrow has `ToString` implemented, but it is way too verbose.
-#[repr(transparent)]
-struct DisplayIntervalUnit(IntervalUnit);
-
-impl std::fmt::Display for DisplayIntervalUnit {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self.0 {
-            IntervalUnit::YearMonth => "year/month",
-            IntervalUnit::DayTime => "day/time",
-            IntervalUnit::MonthDayNano => "month/day/nano",
-        };
-        f.write_str(s)
-    }
-}
-
-// arrow has `ToString` implemented, but it is way too verbose.
-#[repr(transparent)]
-struct DisplayDatatype<'a>(&'a DataType);
-
-impl std::fmt::Display for DisplayDatatype<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match &self.0 {
-            DataType::Null => "null",
-            DataType::Boolean => "bool",
-            DataType::Int8 => "i8",
-            DataType::Int16 => "i16",
-            DataType::Int32 => "i32",
-            DataType::Int64 => "i64",
-            DataType::UInt8 => "u8",
-            DataType::UInt16 => "u16",
-            DataType::UInt32 => "u32",
-            DataType::UInt64 => "u64",
-            DataType::Float16 => "f16",
-            DataType::Float32 => "f32",
-            DataType::Float64 => "f64",
-            DataType::Timestamp(unit, timezone) => {
-                let s = if let Some(tz) = timezone {
-                    format!("Timestamp({}, {tz})", DisplayTimeUnit(*unit))
-                } else {
-                    format!("Timestamp({})", DisplayTimeUnit(*unit))
-                };
-                return f.write_str(&s);
-            }
-            DataType::Date32 => "Date32",
-            DataType::Date64 => "Date64",
-            DataType::Time32(unit) => {
-                let s = format!("Time32({})", DisplayTimeUnit(*unit));
-                return f.write_str(&s);
-            }
-            DataType::Time64(unit) => {
-                let s = format!("Time64({})", DisplayTimeUnit(*unit));
-                return f.write_str(&s);
-            }
-            DataType::Duration(unit) => {
-                let s = format!("Duration({})", DisplayTimeUnit(*unit));
-                return f.write_str(&s);
-            }
-            DataType::Interval(unit) => {
-                let s = format!("Interval({})", DisplayIntervalUnit(*unit));
-                return f.write_str(&s);
-            }
-            DataType::Binary => "Binary",
-            DataType::FixedSizeBinary(size) => return write!(f, "FixedSizeBinary[{size}]"),
-            DataType::LargeBinary => "LargeBinary",
-            DataType::Utf8 => "Utf8",
-            DataType::LargeUtf8 => "LargeUtf8",
-            DataType::List(ref field) => {
-                let s = format!("List[{}]", Self(field.data_type()));
-                return f.write_str(&s);
-            }
-            DataType::FixedSizeList(field, len) => {
-                let s = format!("FixedSizeList[{}; {len}]", Self(field.data_type()));
-                return f.write_str(&s);
-            }
-            DataType::LargeList(field) => {
-                let s = format!("LargeList[{}]", Self(field.data_type()));
-                return f.write_str(&s);
-            }
-            DataType::Struct(fields) => return write!(f, "Struct[{}]", fields.len()),
-            DataType::Union(fields, _) => return write!(f, "Union[{}]", fields.len()),
-            DataType::Map(field, _) => return write!(f, "Map[{}]", Self(field.data_type())),
-            DataType::Dictionary(key, value) => {
-                return write!(f, "Dictionary{{{}: {}}}", Self(key), Self(value))
-            }
-            DataType::Decimal128(_, _) => "Decimal128",
-            DataType::Decimal256(_, _) => "Decimal256",
-            DataType::BinaryView => "BinaryView",
-            DataType::Utf8View => "Utf8View",
-            DataType::ListView(field) => return write!(f, "ListView[{}]", Self(field.data_type())),
-            DataType::LargeListView(field) => {
-                return write!(f, "LargeListView[{}]", Self(field.data_type()))
-            }
-            DataType::RunEndEncoded(_run_ends, values) => {
-                return write!(f, "RunEndEncoded[{}]", Self(values.data_type()))
-            }
-        };
-        f.write_str(s)
-    }
-}
-
 struct DisplayMetadata {
     prefix: &'static str,
     metadata: Metadata,
+    trim_keys: bool,
+    trim_values: bool,
 }
 
 impl std::fmt::Display for DisplayMetadata {
     #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let Self { prefix, metadata } = self;
+        let Self {
+            prefix,
+            metadata,
+            trim_keys,
+            trim_values,
+        } = self;
         f.write_str(
             &metadata
                 .iter()
-                .map(|(key, value)| format!("{prefix}{}: {:?}", trim_name(key), trim_name(value)))
+                .map(|(key, value)| {
+                    let key = if *trim_keys { trim_key(key) } else { key };
+                    let value = if *trim_values {
+                        trim_name(value)
+                    } else {
+                        value
+                    };
+                    format!("{prefix}{key}: {value}",)
+                })
                 .collect_vec()
                 .join("\n"),
         )
     }
 }
 
+fn trim_key(name: &str) -> &str {
+    name.trim().trim_start_matches("rerun:")
+}
+
 fn trim_name(name: &str) -> &str {
-    name.trim_start_matches("rerun.archetypes.")
+    name.trim()
+        .trim_start_matches("rerun.archetypes.")
         .trim_start_matches("rerun.components.")
         .trim_start_matches("rerun.datatypes.")
         .trim_start_matches("rerun.controls.")
@@ -212,11 +128,13 @@ fn trim_name(name: &str) -> &str {
         .trim_start_matches("rerun.")
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct RecordBatchFormatOpts {
     /// If `true`, the dataframe will be transposed on its diagonal axis.
     ///
     /// This is particularly useful for wide (i.e. lots of columns), short (i.e. not many rows) datasets.
+    ///
+    /// Setting this to `true` will also disable all per-column metadata (`include_column_metadata=false`).
     pub transposed: bool,
 
     /// If specified, displays the dataframe with the given fixed width.
@@ -226,6 +144,32 @@ pub struct RecordBatchFormatOpts {
 
     /// If `true`, displays the dataframe's metadata too.
     pub include_metadata: bool,
+
+    /// If `true`, displays the individual columns' metadata too.
+    pub include_column_metadata: bool,
+
+    /// If `true`, trims the Rerun prefixes from field names.
+    pub trim_field_names: bool,
+
+    /// If `true`, trims the `rerun:` prefix from metadata values.
+    pub trim_metadata_keys: bool,
+
+    /// If `true`, trims known Rerun prefixes from metadata values.
+    pub trim_metadata_values: bool,
+}
+
+impl Default for RecordBatchFormatOpts {
+    fn default() -> Self {
+        Self {
+            transposed: false,
+            width: None,
+            include_metadata: true,
+            include_column_metadata: true,
+            trim_field_names: true,
+            trim_metadata_keys: true,
+            trim_metadata_values: true,
+        }
+    }
 }
 
 /// Nicely format this record batch in a way that fits the terminal.
@@ -238,7 +182,7 @@ pub fn format_record_batch_opts(
     batch: &arrow::array::RecordBatch,
     opts: &RecordBatchFormatOpts,
 ) -> Table {
-    format_dataframe(
+    format_dataframe_with_metadata(
         &batch.schema_ref().metadata.clone().into_iter().collect(), // HashMap -> BTreeMap
         &batch.schema_ref().fields,
         batch.columns(),
@@ -254,7 +198,7 @@ pub fn format_record_batch_with_width(
     batch: &arrow::array::RecordBatch,
     width: Option<usize>,
 ) -> Table {
-    format_dataframe(
+    format_dataframe_with_metadata(
         &batch.schema_ref().metadata.clone().into_iter().collect(), // HashMap -> BTreeMap
         &batch.schema_ref().fields,
         batch.columns(),
@@ -262,55 +206,96 @@ pub fn format_record_batch_with_width(
             transposed: false,
             width,
             include_metadata: true,
+            include_column_metadata: true,
+            trim_field_names: true,
+            trim_metadata_keys: true,
+            trim_metadata_values: true,
         },
     )
 }
 
-fn format_dataframe(
+fn format_dataframe_with_metadata(
     metadata: &Metadata,
     fields: &Fields,
     columns: &[ArrayRef],
     opts: &RecordBatchFormatOpts,
 ) -> Table {
-    const MAXIMUM_CELL_CONTENT_WIDTH: u16 = 100;
+    let &RecordBatchFormatOpts {
+        transposed: _,
+        width,
+        include_metadata,
+        include_column_metadata: _,
+        trim_field_names: _, // passed as part of `opts` below
+        trim_metadata_keys: trim_keys,
+        trim_metadata_values: trim_values,
+    } = opts;
 
+    let (num_columns, table) = format_dataframe_without_metadata(fields, columns, opts);
+
+    if include_metadata && !metadata.is_empty() {
+        let mut outer_table = Table::new();
+        outer_table.load_preset(presets::UTF8_FULL);
+
+        if let Some(width) = width {
+            outer_table.set_width(width as _);
+            outer_table.set_content_arrangement(comfy_table::ContentArrangement::Disabled);
+        } else {
+            outer_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
+        }
+
+        outer_table.add_row({
+            let mut row = Row::new();
+            row.add_cell(Cell::new(format!(
+                "METADATA:\n{}",
+                DisplayMetadata {
+                    prefix: "* ",
+                    metadata: metadata.clone(),
+                    trim_keys,
+                    trim_values,
+                }
+            )));
+            row
+        });
+
+        outer_table.add_row(vec![table.trim_fmt()]);
+        outer_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
+        outer_table.set_constraints(
+            std::iter::repeat(comfy_table::ColumnConstraint::ContentWidth).take(num_columns),
+        );
+        outer_table
+    } else {
+        table
+    }
+}
+
+fn format_dataframe_without_metadata(
+    fields: &Fields,
+    columns: &[ArrayRef],
+    opts: &RecordBatchFormatOpts,
+) -> (usize, Table) {
     let &RecordBatchFormatOpts {
         transposed,
         width,
-        include_metadata,
+        include_metadata: _,
+        include_column_metadata,
+        trim_field_names,
+        trim_metadata_keys: trim_keys,
+        trim_metadata_values: trim_values,
     } = opts;
-
-    let mut outer_table = Table::new();
-    outer_table.load_preset(presets::UTF8_FULL);
 
     let mut table = Table::new();
     table.load_preset(presets::UTF8_FULL);
 
     if let Some(width) = width {
-        outer_table.set_width(width as _);
-        outer_table.set_content_arrangement(comfy_table::ContentArrangement::Disabled);
         table.set_width(width as _);
         table.set_content_arrangement(comfy_table::ContentArrangement::Disabled);
     } else {
-        outer_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
         table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
     }
 
     let formatters = itertools::izip!(fields.iter(), columns.iter())
         .map(|(field, array)| custom_array_formatter(field, &**array))
         .collect_vec();
-
-    outer_table.add_row({
-        let mut row = Row::new();
-        row.add_cell(Cell::new(format!(
-            "CHUNK METADATA:\n{}",
-            DisplayMetadata {
-                prefix: "* ",
-                metadata: metadata.clone()
-            }
-        )));
-        row
-    });
 
     let num_columns = if transposed {
         // Turns:
@@ -328,15 +313,16 @@ fn format_dataframe(
         // manifest_url      resource_1_url     resource_2_url     resource_3_url     resource_4_url
         // ```
 
-        let num_rows = columns.len();
-
-        if formatters.is_empty() || num_rows == 0 {
-            return table;
-        }
-
         let mut headers = fields
             .iter()
-            .map(|field| Cell::new(trim_name(field.name())))
+            .map(|field| {
+                let name = if trim_field_names {
+                    trim_name(field.name())
+                } else {
+                    field.name()
+                };
+                Cell::new(name)
+            })
             .collect_vec();
         headers.reverse();
 
@@ -352,20 +338,7 @@ fn format_dataframe(
 
             for i in 0..col.len() {
                 let cell = match formatter(i) {
-                    Ok(string) => {
-                        let chars: Vec<_> = string.chars().collect();
-                        if chars.len() > MAXIMUM_CELL_CONTENT_WIDTH as usize {
-                            Cell::new(
-                                chars
-                                    .into_iter()
-                                    .take(MAXIMUM_CELL_CONTENT_WIDTH.saturating_sub(1).into())
-                                    .chain(['…'])
-                                    .collect::<String>(),
-                            )
-                        } else {
-                            Cell::new(string)
-                        }
-                    }
+                    Ok(string) => format_cell(string),
                     Err(err) => Cell::new(err),
                 };
                 cells.push(cell);
@@ -376,51 +349,56 @@ fn format_dataframe(
 
         columns.first().map_or(0, |list_array| list_array.len())
     } else {
-        let header = fields.iter().map(|field| {
-            if field.metadata().is_empty() {
-                Cell::new(format!(
-                    "{}\n---\ntype: \"{}\"", // NOLINT
-                    trim_name(field.name()),
-                    DisplayDatatype(field.data_type()),
-                ))
-            } else {
-                Cell::new(format!(
-                    "{}\n---\ntype: \"{}\"\n{}", // NOLINT
-                    trim_name(field.name()),
-                    DisplayDatatype(field.data_type()),
-                    DisplayMetadata {
-                        prefix: "",
-                        metadata: field.metadata().clone().into_iter().collect()
-                    },
-                ))
-            }
-        });
+        let header = if include_column_metadata {
+            Either::Left(fields.iter().map(|field| {
+                if field.metadata().is_empty() {
+                    Cell::new(format!(
+                        "{}\n---\ntype: {}",
+                        if trim_field_names {
+                            trim_name(field.name())
+                        } else {
+                            field.name()
+                        },
+                        format_data_type(field.data_type()),
+                    ))
+                } else {
+                    Cell::new(format!(
+                        "{}\n---\ntype: {}\n{}",
+                        if trim_field_names {
+                            trim_name(field.name())
+                        } else {
+                            field.name()
+                        },
+                        format_data_type(field.data_type()),
+                        DisplayMetadata {
+                            prefix: "",
+                            metadata: field.metadata().clone().into_iter().collect(),
+                            trim_keys,
+                            trim_values,
+                        },
+                    ))
+                }
+            }))
+        } else {
+            Either::Right(fields.iter().map(|field| {
+                let name = if trim_field_names {
+                    trim_name(field.name())
+                } else {
+                    field.name()
+                };
+                Cell::new(name.to_owned())
+            }))
+        };
 
         table.set_header(header);
 
         let num_rows = columns.first().map_or(0, |list_array| list_array.len());
 
-        if formatters.is_empty() || num_rows == 0 {
-            return table;
-        }
         for row in 0..num_rows {
             let cells: Vec<_> = formatters
                 .iter()
                 .map(|formatter| match formatter(row) {
-                    Ok(string) => {
-                        let chars: Vec<_> = string.chars().collect();
-                        if chars.len() > MAXIMUM_CELL_CONTENT_WIDTH as usize {
-                            Cell::new(
-                                chars
-                                    .into_iter()
-                                    .take(MAXIMUM_CELL_CONTENT_WIDTH.saturating_sub(1).into())
-                                    .chain(['…'])
-                                    .collect::<String>(),
-                            )
-                        } else {
-                            Cell::new(string)
-                        }
-                    }
+                    Ok(string) => format_cell(string),
                     Err(err) => Cell::new(err),
                 })
                 .collect();
@@ -440,14 +418,22 @@ fn format_dataframe(
         );
     }
 
-    if include_metadata {
-        outer_table.add_row(vec![table.trim_fmt()]);
-        outer_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
-        outer_table.set_constraints(
-            std::iter::repeat(comfy_table::ColumnConstraint::ContentWidth).take(num_columns),
-        );
-        outer_table
+    (num_columns, table)
+}
+
+fn format_cell(string: String) -> Cell {
+    const MAXIMUM_CELL_CONTENT_WIDTH: u16 = 100;
+
+    let chars: Vec<_> = string.chars().collect();
+    if chars.len() > MAXIMUM_CELL_CONTENT_WIDTH as usize {
+        Cell::new(
+            chars
+                .into_iter()
+                .take(MAXIMUM_CELL_CONTENT_WIDTH.saturating_sub(1).into())
+                .chain(['…'])
+                .collect::<String>(),
+        )
     } else {
-        table
+        Cell::new(string)
     }
 }

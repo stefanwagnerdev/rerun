@@ -5,14 +5,14 @@
 
 from __future__ import annotations
 
-from typing import Any, Sequence, Union
+from collections.abc import Sequence
+from typing import Any, Union
 
 import pyarrow as pa
 from attrs import define, field
 from rerun._baseclasses import (
     BaseBatch,
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -25,7 +25,7 @@ __all__ = ["AffixFuzzer17", "AffixFuzzer17ArrayLike", "AffixFuzzer17Batch", "Aff
 class AffixFuzzer17(ComponentMixin):
     _BATCH_TYPE = None
 
-    def __init__(self: Any, many_optional_unions: datatypes.AffixFuzzer3ArrayLike | None = None):
+    def __init__(self: Any, many_optional_unions: datatypes.AffixFuzzer3ArrayLike | None = None) -> None:
         """Create a new instance of the AffixFuzzer17 component."""
 
         # You can define your own __init__ function as a member of AffixFuzzer17Ext in affix_fuzzer17_ext.py
@@ -103,7 +103,7 @@ class AffixFuzzer17Batch(BaseBatch[AffixFuzzer17ArrayLike], ComponentBatchMixin)
             metadata={},
         )
     )
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.testing.components.AffixFuzzer17")
+    _COMPONENT_TYPE: str = "rerun.testing.components.AffixFuzzer17"
 
     @staticmethod
     def _native_to_pa_array(data: AffixFuzzer17ArrayLike, data_type: pa.DataType) -> pa.Array:

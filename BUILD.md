@@ -23,12 +23,12 @@ cd rerun
 
 Now install the `pixi` package manager: <https://github.com/prefix-dev/pixi?tab=readme-ov-file#installation>
 
-Make sure `cargo --version` prints `1.81.0` once you are done.
+Make sure `cargo --version` prints `1.85.0` once you are done.
 
 If you are using an Apple-silicon Mac (M1, M2), make sure `rustc -vV` outputs `host: aarch64-apple-darwin`. If not, this should fix it:
 
 ```sh
-rustup set default-host aarch64-apple-darwin && rustup install 1.81.0
+rustup set default-host aarch64-apple-darwin && rustup install 1.85.0
 ```
 
 ## Git-lfs
@@ -133,7 +133,7 @@ High-level documentation for Rerun can be found at [http://rerun.io/docs](http:/
 
 ## Building for the web
 
-If you want to build a standalone Rerun executable that contains the web-viewer and a websocket server,
+If you want to build a standalone Rerun executable that contains the web-viewer and a gRPC server,
 you need to install the `wasm32-unknown-unknown` Rust target and ensure the `web_viewer` feature flag is set when building rerun.
 This is automatically done by this shortcut which builds & runs the web viewer:
 ```

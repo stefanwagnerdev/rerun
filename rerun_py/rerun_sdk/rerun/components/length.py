@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -27,11 +26,10 @@ class Length(datatypes.Float32, ComponentMixin):
     # You can define your own __init__ function as a member of LengthExt in length_ext.py
 
     # Note: there are no fields here because Length delegates to datatypes.Float32
-    pass
 
 
 class LengthBatch(datatypes.Float32Batch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.Length")
+    _COMPONENT_TYPE: str = "rerun.components.Length"
 
 
 # This is patched in late to avoid circular dependencies.

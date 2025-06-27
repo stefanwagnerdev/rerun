@@ -42,16 +42,19 @@ impl VisualizerSystem for TextDocumentSystem {
     ) -> Result<Vec<re_renderer::QueueableDrawData>, ViewSystemExecutionError> {
         let timeline_query = LatestAtQuery::new(view_query.timeline, view_query.latest_at);
 
-        for data_result in view_query.iter_visible_data_results(ctx, Self::identifier()) {
+        for data_result in view_query.iter_visible_data_results(Self::identifier()) {
             let results = data_result
                 .latest_at_with_blueprint_resolved_data::<TextDocument>(ctx, &timeline_query);
 
-            let Some(text) = results.get_required_mono::<components::Text>() else {
+            let Some(text) =
+                results.get_required_mono::<components::Text>(&TextDocument::descriptor_text())
+            else {
                 continue;
             };
             self.text_entries.push(TextDocumentEntry {
                 body: text.clone(),
-                media_type: results.get_mono_with_fallback(),
+                media_type: results
+                    .get_mono_with_fallback(&TextDocument::descriptor_media_type(), self),
             });
         }
 

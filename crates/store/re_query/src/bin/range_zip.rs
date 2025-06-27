@@ -2,7 +2,7 @@
 
 #![allow(clippy::tuple_array_conversions)] // false positive
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools as _, izip};
 
 struct Params {
     num_required: usize,

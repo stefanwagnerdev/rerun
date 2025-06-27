@@ -1,6 +1,6 @@
 #![allow(unsafe_op_in_unsafe_fn)] // False positive due to #[pyfunction] macro
 
-use pyo3::{exceptions::PyRuntimeError, pyfunction, Bound, PyAny, PyResult};
+use pyo3::{Bound, PyAny, PyResult, exceptions::PyRuntimeError, pyfunction};
 
 use re_arrow_util::ArrowArrayDowncastRef as _;
 use re_video::VideoLoadError;
@@ -15,7 +15,7 @@ use crate::arrow::array_to_rust;
 /// So instead, we pass the arrow array directly.
 #[pyfunction]
 #[pyo3(signature = (video_bytes_arrow_array, media_type=None))]
-pub fn asset_video_read_frame_timestamps_ns(
+pub fn asset_video_read_frame_timestamps_nanos(
     video_bytes_arrow_array: &Bound<'_, PyAny>,
     media_type: Option<&str>,
 ) -> PyResult<Vec<i64>> {
@@ -42,9 +42,10 @@ pub fn asset_video_read_frame_timestamps_ns(
     };
 
     Ok(
-        re_video::VideoData::load_from_bytes(video_bytes, media_type)
+        re_video::VideoDataDescription::load_from_bytes(video_bytes, media_type, "AssetVideo")
             .map_err(|err| PyRuntimeError::new_err(err.to_string()))?
-            .frame_timestamps_ns()
+            .frame_timestamps_nanos()
+            .ok_or_else(|| PyRuntimeError::new_err(VideoLoadError::NoTimescale.to_string()))?
             .collect(),
     )
 }

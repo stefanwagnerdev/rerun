@@ -36,6 +36,7 @@ from .half_size3d import HalfSize3D, HalfSize3DBatch
 from .image_buffer import ImageBuffer, ImageBufferBatch
 from .image_format import ImageFormat, ImageFormatBatch
 from .image_plane_distance import ImagePlaneDistance, ImagePlaneDistanceBatch
+from .interactive import Interactive, InteractiveBatch
 from .keypoint_id import KeypointId, KeypointIdBatch
 from .lat_lon import LatLon, LatLonBatch
 from .length import Length, LengthBatch
@@ -78,6 +79,7 @@ from .tensor_width_dimension import TensorWidthDimension, TensorWidthDimensionBa
 from .texcoord2d import Texcoord2D, Texcoord2DBatch
 from .text import Text, TextBatch
 from .text_log_level import TextLogLevel, TextLogLevelBatch
+from .timestamp import Timestamp, TimestampBatch
 from .transform_mat3x3 import TransformMat3x3, TransformMat3x3Batch
 from .transform_relation import (
     TransformRelation,
@@ -90,6 +92,8 @@ from .triangle_indices import TriangleIndices, TriangleIndicesBatch
 from .value_range import ValueRange, ValueRangeBatch
 from .vector2d import Vector2D, Vector2DBatch
 from .vector3d import Vector3D, Vector3DBatch
+from .video_codec import VideoCodec, VideoCodecArrayLike, VideoCodecBatch, VideoCodecLike
+from .video_sample import VideoSample, VideoSampleBatch
 from .video_timestamp import VideoTimestamp, VideoTimestampBatch
 from .view_coordinates import ViewCoordinates, ViewCoordinatesBatch
 from .visible import Visible, VisibleBatch
@@ -155,6 +159,8 @@ __all__ = [
     "ImageFormatBatch",
     "ImagePlaneDistance",
     "ImagePlaneDistanceBatch",
+    "Interactive",
+    "InteractiveBatch",
     "KeypointId",
     "KeypointIdBatch",
     "LatLon",
@@ -237,6 +243,8 @@ __all__ = [
     "TextBatch",
     "TextLogLevel",
     "TextLogLevelBatch",
+    "Timestamp",
+    "TimestampBatch",
     "TransformMat3x3",
     "TransformMat3x3Batch",
     "TransformRelation",
@@ -253,6 +261,12 @@ __all__ = [
     "Vector2DBatch",
     "Vector3D",
     "Vector3DBatch",
+    "VideoCodec",
+    "VideoCodecArrayLike",
+    "VideoCodecBatch",
+    "VideoCodecLike",
+    "VideoSample",
+    "VideoSampleBatch",
     "VideoTimestamp",
     "VideoTimestampBatch",
     "ViewCoordinates",

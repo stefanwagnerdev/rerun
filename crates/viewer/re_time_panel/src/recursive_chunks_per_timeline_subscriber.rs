@@ -181,7 +181,8 @@ mod tests {
 
     use re_chunk_store::{Chunk, ChunkStore, ChunkStoreConfig, GarbageCollectionOptions, RowId};
     use re_log_types::{
-        example_components::MyPoint, ResolvedTimeRange, StoreId, TimeInt, Timeline,
+        ResolvedTimeRange, StoreId, TimeInt, Timeline, TimelineName,
+        example_components::{MyPoint, MyPoints},
     };
 
     use super::{EntityTimelineChunks, PathRecursiveChunksPerTimelineStoreSubscriber};
@@ -198,18 +199,25 @@ mod tests {
         // We use two timelines for which we log events on two entities, at the root and at a grandchild.
         let t0 = Timeline::new_sequence("time0");
         let t1 = Timeline::new_sequence("time1");
-        let component_batch = &[MyPoint::new(3.0, 3.0)] as _; // Generic component batch, don't care about the contents.
+        let component_batch = (
+            MyPoints::descriptor_points(),
+            &[MyPoint::new(3.0, 3.0)] as _, // Generic component batch, don't care about the contents.
+        );
 
         // Events at the root path.
         // 2x: single chunk with two events for both t0 and t1.
         for i in 1..=2 {
             store.insert_chunk(&Arc::new(
                 Chunk::builder("/".into())
-                    .with_component_batches(RowId::new(), [(t0, i), (t1, i)], [component_batch])
+                    .with_component_batches(
+                        RowId::new(),
+                        [(t0, i), (t1, i)],
+                        [component_batch.clone()],
+                    )
                     .with_component_batches(
                         RowId::new(),
                         [(t0, i + 2), (t1, i + 2)],
-                        [component_batch],
+                        [component_batch.clone()],
                     )
                     .build()?,
             ))?;
@@ -219,19 +227,19 @@ mod tests {
         // One chunk with one event at t0, one chunk with two events at t1
         store.insert_chunk(&Arc::new(
             Chunk::builder("/parent/child".into())
-                .with_component_batches(RowId::new(), [(t0, 0)], [component_batch])
+                .with_component_batches(RowId::new(), [(t0, 0)], [component_batch.clone()])
                 .build()?,
         ))?;
         store.insert_chunk(&Arc::new(
             Chunk::builder("/parent/child".into())
-                .with_component_batches(RowId::new(), [(t1, 1)], [component_batch])
+                .with_component_batches(RowId::new(), [(t1, 1)], [component_batch.clone()])
                 .with_component_batches(RowId::new(), [(t1, 3)], [component_batch])
                 .build()?,
         ))?;
 
         assert_eq!(
             PathRecursiveChunksPerTimelineStoreSubscriber::access(&store.id(), |subs| {
-                test_subscriber_status_before_removal(subs, t0, t1)
+                test_subscriber_status_before_removal(subs, *t0.name(), *t1.name())
             }),
             Some(Some(()))
         );
@@ -249,7 +257,7 @@ mod tests {
 
         assert_eq!(
             PathRecursiveChunksPerTimelineStoreSubscriber::access(&store.id(), |subs| {
-                test_subscriber_status_after_t0_child_chunk_removal(subs, t0, t1)
+                test_subscriber_status_after_t0_child_chunk_removal(subs, *t0.name(), *t1.name())
             }),
             Some(Some(()))
         );
@@ -259,8 +267,8 @@ mod tests {
 
     fn test_subscriber_status_before_removal(
         subs: &PathRecursiveChunksPerTimelineStoreSubscriber,
-        t0: Timeline,
-        t1: Timeline,
+        t0: TimelineName,
+        t1: TimelineName,
     ) -> Option<()> {
         // The root accumulates all chunks & events for each timeline.
         let root_t0 = subs.path_recursive_chunks_for_entity_and_timeline(&"/".into(), &t0)?;
@@ -286,8 +294,8 @@ mod tests {
 
     fn test_subscriber_status_after_t0_child_chunk_removal(
         subs: &PathRecursiveChunksPerTimelineStoreSubscriber,
-        t0: Timeline,
-        t1: Timeline,
+        t0: TimelineName,
+        t1: TimelineName,
     ) -> Option<()> {
         // The root accumulates all chunks & events for each timeline.
         let root_t0 = subs.path_recursive_chunks_for_entity_and_timeline(&"/".into(), &t0)?;
@@ -315,8 +323,8 @@ mod tests {
         subs: &PathRecursiveChunksPerTimelineStoreSubscriber,
         child_t0: &EntityTimelineChunks,
         child_t1: &EntityTimelineChunks,
-        t0: Timeline,
-        t1: Timeline,
+        t0: TimelineName,
+        t1: TimelineName,
     ) -> Option<()> {
         // We only logged at `parent/child`, so we expect all events to `parent` copies over everything `parent/child` has.
         assert_eq!(
@@ -329,9 +337,13 @@ mod tests {
         );
 
         // No information arbitrary down the tree.
-        assert!(subs
-            .path_recursive_chunks_for_entity_and_timeline(&"/parent/child/grandchild".into(), &t1)
-            .is_none());
+        assert!(
+            subs.path_recursive_chunks_for_entity_and_timeline(
+                &"/parent/child/grandchild".into(),
+                &t1
+            )
+            .is_none()
+        );
 
         Some(())
     }

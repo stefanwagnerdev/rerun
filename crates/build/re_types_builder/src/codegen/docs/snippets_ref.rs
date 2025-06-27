@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
 };
 
-use anyhow::Context;
+use anyhow::Context as _;
 use camino::{Utf8Path, Utf8PathBuf};
 use itertools::Itertools as _;
 
@@ -112,7 +112,7 @@ impl CodeGenerator for SnippetsRefCodeGenerator {
         &mut self,
         reporter: &Reporter,
         objects: &Objects,
-        _arrow_registry: &crate::ArrowRegistry,
+        _type_registry: &crate::TypeRegistry,
     ) -> GeneratedFiles {
         match self.generate_fallible(objects) {
             Ok(files) => files,
@@ -211,7 +211,9 @@ impl SnippetsRefCodeGenerator {
             #[allow(clippy::invisible_characters)]
             let snippet_name_qualified = &snippet.name_qualified.replace('/', "⁠/⁠");
 
-            let row = format!("| **{obj_name_rendered}** | `{snippet_name_qualified}` | {snippet_descr} | {link_py} | {link_rs} | {link_cpp} |");
+            let row = format!(
+                "| **{obj_name_rendered}** | `{snippet_name_qualified}` | {snippet_descr} | {link_py} | {link_rs} | {link_cpp} |"
+            );
 
             Ok(row)
         }
@@ -228,7 +230,7 @@ impl SnippetsRefCodeGenerator {
                     // NOTE: Gotta sort twice to make sure it stays stable after the second one.
                     snippets.sort_by(|a, b| a.name_qualified.cmp(&b.name_qualified));
                     snippets.sort_by(|a, b| {
-                        if a.name_qualified.contains(&obj.snake_case_name()) {
+                        if contains_whole_word(&a.name_qualified, &obj.snake_case_name()) {
                             // Snippets that contain the object in question in their name should
                             // bubble up to the top.
                             Ordering::Less
@@ -241,6 +243,10 @@ impl SnippetsRefCodeGenerator {
                 .filter(|(obj, snippet)| {
                     if opt_outs.contains_key(&snippet.name_qualified) {
                         return false;
+                    }
+
+                    if let Some(deprecation_summary) = obj.deprecation_summary() {
+                        panic!("Snippet {} contained reference to deprecated object '{}'. Please migrate the snippet. Migration notice: {deprecation_summary}", snippet.name_qualified, obj.fqname);
                     }
 
                     if obj.kind == ObjectKind::Archetype {
@@ -398,6 +404,10 @@ fn collect_snippets_recursively<'o>(
         let meta = snippet.metadata()?;
         let path = snippet.path();
 
+        if path.file_name().is_some_and(|name| name == "__init__.py") {
+            continue;
+        }
+
         let name = path.file_stem().unwrap().to_str().unwrap().to_owned();
         let name_qualified = path.strip_prefix(snippet_root_path)?.with_extension("");
         let name_qualified = name_qualified.to_str().unwrap().replace('\\', "/");
@@ -413,7 +423,7 @@ fn collect_snippets_recursively<'o>(
         }
 
         // We only track the Python one. We'll derive the other two from there, if they exist at all.
-        if !path.extension().is_some_and(|p| p == "py") {
+        if path.extension().is_none_or(|p| p != "py") {
             continue;
         }
 
@@ -424,7 +434,7 @@ fn collect_snippets_recursively<'o>(
                 .lines()
                 .skip_while(|line| line.trim().is_empty()) // Strip leading empty lines.
                 .collect_vec();
-            if lines.first().map_or(false, |line| line.trim() == "\"\"\"") {
+            if lines.first().is_some_and(|line| line.trim() == "\"\"\"") {
                 // Multi-line Python docstrings.
                 lines.iter().skip(1).take(1).next()
             } else {
@@ -456,7 +466,7 @@ fn collect_snippets_recursively<'o>(
             ),
         ] {
             for obj in objs {
-                if contents.contains(&obj.name) {
+                if contains_whole_word(&contents, &obj.name) {
                     set.insert(*obj);
                     continue;
                 }
@@ -522,6 +532,53 @@ fn collect_snippets_recursively<'o>(
     }
 
     Ok(snippets)
+}
+
+/// Does the source text contain the given word as a whole word,
+/// i.e. with word-breaking characters before and after it?
+fn contains_whole_word(contents: &str, needle: &str) -> bool {
+    let Some(pos) = contents.find(needle) else {
+        return false;
+    };
+
+    if 0 < pos {
+        let byte_before = contents.as_bytes()[pos - 1];
+        if byte_before.is_ascii_alphanumeric() || byte_before == b':' {
+            return false;
+        }
+    }
+    if pos + needle.len() < contents.len()
+        && contents.as_bytes()[pos + needle.len()].is_ascii_alphanumeric()
+    {
+        return false;
+    }
+    true
+}
+
+#[test]
+fn test_contains_whole_word() {
+    assert!(contains_whole_word("foo", "foo"));
+    assert!(contains_whole_word("foo bar", "foo"));
+    assert!(contains_whole_word("foo bar", "bar"));
+    assert!(contains_whole_word("foo bar baz", "foo"));
+    assert!(contains_whole_word("foo bar baz", "bar"));
+    assert!(contains_whole_word("foo bar baz", "baz"));
+    assert!(!contains_whole_word("foobar", "foo"));
+    assert!(!contains_whole_word("foobar", "bar"));
+    assert!(contains_whole_word("underscore_is_breaking", "underscore"));
+    assert!(contains_whole_word("underscore_is_breaking", "is_breaking"));
+    assert!(contains_whole_word(
+        "rrb.VisualizerOverrides(rrb.visualizers.SeriesPoints)",
+        "SeriesPoints" // plural!
+    ));
+    assert!(!contains_whole_word(
+        "rrb.VisualizerOverrides(rrb.visualizers.SeriesPoints)",
+        "SeriesPoint" // singular!
+    ));
+    assert!(
+        !contains_whole_word("jawOpen:Scalar", "Scalar"),
+        "Special handling"
+    );
 }
 
 /// Neatly organized [`Object`]s (archetypes, components, etc).

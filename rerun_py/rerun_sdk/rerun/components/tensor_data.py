@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -31,11 +30,10 @@ class TensorData(datatypes.TensorData, ComponentMixin):
     # You can define your own __init__ function as a member of TensorDataExt in tensor_data_ext.py
 
     # Note: there are no fields here because TensorData delegates to datatypes.TensorData
-    pass
 
 
 class TensorDataBatch(datatypes.TensorDataBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.TensorData")
+    _COMPONENT_TYPE: str = "rerun.components.TensorData"
 
 
 # This is patched in late to avoid circular dependencies.

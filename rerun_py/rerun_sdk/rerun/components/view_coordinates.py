@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 from .view_coordinates_ext import ViewCoordinatesExt
@@ -36,17 +35,18 @@ class ViewCoordinates(ViewCoordinatesExt, datatypes.ViewCoordinates, ComponentMi
      * Left = 4
      * Forward = 5
      * Back = 6
+
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
     """
 
     _BATCH_TYPE = None
     # You can define your own __init__ function as a member of ViewCoordinatesExt in view_coordinates_ext.py
 
     # Note: there are no fields here because ViewCoordinates delegates to datatypes.ViewCoordinates
-    pass
 
 
 class ViewCoordinatesBatch(datatypes.ViewCoordinatesBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.ViewCoordinates")
+    _COMPONENT_TYPE: str = "rerun.components.ViewCoordinates"
 
 
 # This is patched in late to avoid circular dependencies.

@@ -17,6 +17,9 @@
 
 namespace rerun::blueprint::archetypes {
     /// **Archetype**: Configuration of the map view zoom level.
+    ///
+    /// ⚠ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
+    ///
     struct MapZoom {
         /// Zoom level for the map.
         ///
@@ -24,18 +27,18 @@ namespace rerun::blueprint::archetypes {
         std::optional<ComponentBatch> zoom;
 
       public:
-        static constexpr const char IndicatorComponentName[] =
+        static constexpr const char IndicatorComponentType[] =
             "rerun.blueprint.components.MapZoomIndicator";
 
         /// Indicator component, used to identify the archetype when converting to a list of components.
-        using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentName>;
+        using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentType>;
         /// The name of the archetype as used in `ComponentDescriptor`s.
         static constexpr const char ArchetypeName[] = "rerun.blueprint.archetypes.MapZoom";
 
         /// `ComponentDescriptor` for the `zoom` field.
         static constexpr auto Descriptor_zoom = ComponentDescriptor(
-            ArchetypeName, "zoom",
-            Loggable<rerun::blueprint::components::ZoomLevel>::Descriptor.component_name
+            ArchetypeName, "MapZoom:zoom",
+            Loggable<rerun::blueprint::components::ZoomLevel>::ComponentType
         );
 
       public:

@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -22,11 +21,10 @@ class Range1D(datatypes.Range1D, ComponentMixin):
     # You can define your own __init__ function as a member of Range1DExt in range1d_ext.py
 
     # Note: there are no fields here because Range1D delegates to datatypes.Range1D
-    pass
 
 
 class Range1DBatch(datatypes.Range1DBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.Range1D")
+    _COMPONENT_TYPE: str = "rerun.components.Range1D"
 
 
 # This is patched in late to avoid circular dependencies.

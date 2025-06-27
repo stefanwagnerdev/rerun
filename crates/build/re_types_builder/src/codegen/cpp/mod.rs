@@ -3,20 +3,20 @@ mod forward_decl;
 mod includes;
 mod method;
 
-use std::collections::HashSet;
+use std::{collections::HashSet, str::FromStr as _};
 
 use camino::{Utf8Path, Utf8PathBuf};
-use itertools::Itertools;
+use itertools::Itertools as _;
 use proc_macro2::{Ident, Literal, TokenStream};
 use quote::{format_ident, quote};
 use rayon::prelude::*;
 
 use crate::{
+    ATTR_CPP_NO_DEFAULT_CTOR, ATTR_CPP_NO_FIELD_CTORS, ATTR_CPP_RENAME_FIELD, Docs, ElementType,
+    GeneratedFiles, Object, ObjectField, ObjectKind, Objects, Reporter, Type, TypeRegistry,
     codegen::{autogen_warning, common::collect_snippets_for_api_docs},
     format_path,
-    objects::ObjectClass,
-    ArrowRegistry, Docs, ElementType, GeneratedFiles, Object, ObjectField, ObjectKind, Objects,
-    Reporter, Type, ATTR_CPP_NO_DEFAULT_CTOR, ATTR_CPP_NO_FIELD_CTORS, ATTR_CPP_RENAME_FIELD,
+    objects::{EnumIntegerType, ObjectClass},
 };
 
 use self::array_builder::{arrow_array_builder_type, arrow_array_builder_type_object};
@@ -24,7 +24,7 @@ use self::forward_decl::{ForwardDecl, ForwardDecls};
 use self::includes::Includes;
 use self::method::{Method, MethodDeclaration};
 
-use super::{common::ExampleInfo, Target};
+use super::{Target, common::ExampleInfo};
 
 type Result<T = (), E = anyhow::Error> = std::result::Result<T, E>;
 
@@ -124,7 +124,7 @@ impl crate::CodeGenerator for CppCodeGenerator {
         &mut self,
         reporter: &Reporter,
         objects: &Objects,
-        _arrow_registry: &ArrowRegistry,
+        _type_registry: &TypeRegistry,
     ) -> GeneratedFiles {
         re_tracing::profile_wait!("generate_folder");
 
@@ -325,7 +325,9 @@ fn hpp_type_extensions(
                     });
                     includes.insert_system(&line[start + 1..end]);
                 } else {
-                    panic!("Expected to find '\"' or '<' in include line {line} in file {extension_file:?}");
+                    panic!(
+                        "Expected to find '\"' or '<' in include line {line} in file {extension_file:?}"
+                    );
                 }
             } else {
                 hpp_extension_string += line;
@@ -426,7 +428,7 @@ impl QuotedObject {
                     unimplemented!();
                 }
             },
-            ObjectClass::Enum => {
+            ObjectClass::Enum(_) => {
                 if !hpp_type_extensions.is_empty() {
                     reporter.error(&obj.virtpath, &obj.fqname, "C++ enums cannot have type extensions, because C++ enums doesn't support member functions");
                 }
@@ -514,20 +516,28 @@ impl QuotedObject {
             .iter()
             .map(|obj_field| {
                 let field_name = field_name(obj_field);
+                let component = format!("{}:{field_name}", obj.name);
                 let comment = quote_doc_comment(&format!(
                     "`ComponentDescriptor` for the `{field_name}` field."
                 ));
                 let constant_name = archetype_component_descriptor_constant_ident(obj_field);
                 let field_type = obj_field.typ.fqname();
-                let field_type = quote_fqname_as_type_path(
-                    &mut hpp_includes,
-                    field_type.expect("Component field must have a non trivial type"),
-                );
+
+                let field_type = if let Some(field_type) = field_type {
+                    quote_fqname_as_type_path(&mut hpp_includes, field_type)
+                } else {
+                    reporter.error(
+                        &obj_field.virtpath,
+                        &obj_field.fqname,
+                        "Component field must have a non trivial type",
+                    );
+                    TokenStream::new()
+                };
                 quote! {
                     #NEWLINE_TOKEN
                     #comment
                     static constexpr auto #constant_name = ComponentDescriptor(
-                        ArchetypeName, #field_name, Loggable<#field_type>::Descriptor.component_name
+                        ArchetypeName, #component, Loggable<#field_type>::ComponentType
                     );
                 }
             })
@@ -559,10 +569,17 @@ impl QuotedObject {
                     let field_assignments = obj.fields.iter().map(|obj_field| {
                         let field_ident = field_name_ident(obj_field);
                         let field_type = obj_field.typ.fqname();
-                        let field_type = quote_fqname_as_type_path(
-                            &mut hpp_includes,
-                            field_type.expect("Component field must have a non trivial type"),
-                        );
+                        let field_type =
+                            if let Some(field_type) = field_type {
+                                quote_fqname_as_type_path(&mut hpp_includes, field_type)
+                            } else {
+                                reporter.error(
+                                    &obj_field.virtpath,
+                                    &obj_field.fqname,
+                                    "Component field must have a non trivial type",
+                                );
+                                TokenStream::new()
+                            };
                         let descriptor = archetype_component_descriptor_constant_ident(obj_field);
                         quote! {
                             archetype.#field_ident = ComponentBatch::empty<#field_type>(#descriptor).value_or_throw();
@@ -729,11 +746,13 @@ impl QuotedObject {
             .iter()
             .map(|m| m.to_cpp_tokens(&quote!(#archetype_type_ident)));
 
-        let indicator_comment = quote_doc_comment("Indicator component, used to identify the archetype when converting to a list of components.");
+        let indicator_comment = quote_doc_comment(
+            "Indicator component, used to identify the archetype when converting to a list of components.",
+        );
         let indicator_component_fqname =
             format!("{}Indicator", obj.fqname).replace("archetypes", "components");
         let doc_hide_comment = quote_hide_from_docs();
-        let deprecation_notice = quote_deprecation_notice(obj);
+        let deprecated_notice = quote_deprecated_notice(obj);
         let name_doc_string =
             quote_doc_comment("The name of the archetype as used in `ComponentDescriptor`s.");
 
@@ -744,12 +763,12 @@ impl QuotedObject {
                 .typ
                 .fqname()
                 .and_then(|fqname| objects.get(fqname))
-                .is_some_and(|obj| obj.deprecation_notice().is_some())
+                .is_some_and(|obj| obj.is_deprecated())
         });
         let (deprecation_ignore_start, deprecation_ignore_end) =
             quote_deprecation_ignore_start_and_end(
                 &mut hpp_includes,
-                obj.deprecation_notice().is_some() || has_any_deprecated_fields,
+                obj.is_deprecated() || has_any_deprecated_fields,
             );
 
         let default_ctor = if obj.is_attr_set(ATTR_CPP_NO_DEFAULT_CTOR) {
@@ -774,15 +793,15 @@ impl QuotedObject {
 
             namespace rerun::#quoted_namespace {
                 #quoted_docs
-                struct #deprecation_notice #archetype_type_ident {
+                struct #deprecated_notice #archetype_type_ident {
                     #(#field_declarations;)*
 
                 public:
-                    static constexpr const char IndicatorComponentName[] = #indicator_component_fqname;
+                    static constexpr const char IndicatorComponentType[] = #indicator_component_fqname;
                     #NEWLINE_TOKEN
                     #NEWLINE_TOKEN
                     #indicator_comment
-                    using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentName>;
+                    using IndicatorComponent = rerun::components::IndicatorComponent<IndicatorComponentType>;
 
                     #NEWLINE_TOKEN
                     #name_doc_string
@@ -813,8 +832,6 @@ impl QuotedObject {
                 #doc_hide_comment
                 template<typename T>
                 struct AsComponents;
-
-                #deprecation_ignore_start
 
                 #doc_hide_comment
                 template<>
@@ -868,7 +885,7 @@ impl QuotedObject {
 
         let type_ident = obj.ident();
         let quoted_docs = quote_obj_docs(reporter, objects, obj);
-        let deprecation_notice = quote_deprecation_notice(obj);
+        let deprecated_notice = quote_deprecated_notice(obj);
 
         let mut cpp_includes = Includes::new(obj.fqname.clone(), obj.scope());
         let mut hpp_declarations = ForwardDecls::default();
@@ -906,7 +923,10 @@ impl QuotedObject {
             && obj.fields.len() == 1
             && matches!(obj.fields[0].typ, Type::Object { .. })
         {
-            if let Type::Object(datatype_fqname) = &obj.fields[0].typ {
+            if let Type::Object {
+                fqname: datatype_fqname,
+            } = &obj.fields[0].typ
+            {
                 let data_type = quote_field_type(&mut hpp_includes, &obj.fields[0]);
                 let type_name = datatype_fqname.split('.').last().unwrap();
                 let field_name = format_ident!("{}", obj.fields[0].name);
@@ -944,7 +964,7 @@ impl QuotedObject {
 
             namespace rerun::#quoted_namespace {
                 #quoted_docs
-                struct #deprecation_notice #type_ident {
+                struct #deprecated_notice #type_ident {
                     #(#field_declarations;)*
 
                     #hpp_type_extensions
@@ -1023,7 +1043,7 @@ impl QuotedObject {
         let pascal_case_name = &obj.name;
         let pascal_case_ident = obj.ident();
         let quoted_docs = quote_obj_docs(reporter, objects, obj);
-        let deprecation_notice = quote_deprecation_notice(obj);
+        let deprecated_notice = quote_deprecated_notice(obj);
 
         let tag_typename = format_ident!("{pascal_case_name}Tag");
         let data_typename = format_ident!("{pascal_case_name}Data");
@@ -1296,7 +1316,9 @@ impl QuotedObject {
             }
         };
 
-        let swap_comment = quote_comment("This bitwise swap would fail for self-referential types, but we don't have any of those.");
+        let swap_comment = quote_comment(
+            "This bitwise swap would fail for self-referential types, but we don't have any of those.",
+        );
         let hide_from_docs_comment = quote_hide_from_docs();
 
         let (hpp_loggable, cpp_loggable) = quote_loggable_hpp_and_cpp(
@@ -1347,7 +1369,7 @@ impl QuotedObject {
                 }
 
                 #quoted_docs
-                struct #deprecation_notice #pascal_case_ident {
+                struct #deprecated_notice #pascal_case_ident {
                     #pascal_case_ident() : _tag(detail::#tag_typename::None) {}
 
                     #copy_constructor
@@ -1441,7 +1463,7 @@ impl QuotedObject {
 
         let type_ident = obj.ident();
         let quoted_docs = quote_obj_docs(reporter, objects, obj);
-        let deprecation_notice = quote_deprecation_notice(obj);
+        let deprecated_notice = quote_deprecated_notice(obj);
 
         let mut cpp_includes = Includes::new(obj.fqname.clone(), obj.scope());
         let mut hpp_declarations = ForwardDecls::default();
@@ -1450,17 +1472,23 @@ impl QuotedObject {
             .fields
             .iter()
             .map(|obj_field| {
-                let enum_value = obj_field.enum_value.unwrap();
                 let docstring = quote_field_docs(reporter, objects, obj_field);
                 let field_name = field_name_ident(obj_field);
-
-                // We assign the arrow type index to the enum fields to make encoding simpler and faster:
-                let arrow_type_index = Literal::usize_unsuffixed(enum_value as _);
+                let enum_value = proc_macro2::Literal::from_str(
+                    &obj.enum_integer_type()
+                        .expect("enums must have an integer type")
+                        .format_value(
+                            obj_field
+                                .enum_or_union_variant_value
+                                .expect("enums fields must have values"),
+                        ),
+                )
+                .unwrap();
 
                 quote! {
                     #NEWLINE_TOKEN
                     #docstring
-                    #field_name = #arrow_type_index
+                    #field_name = #enum_value
                 }
             })
             .collect_vec();
@@ -1474,6 +1502,13 @@ impl QuotedObject {
             &mut hpp_declarations,
         );
 
+        let enum_integer_type = match obj.enum_integer_type().unwrap() {
+            EnumIntegerType::U8 => quote!(uint8_t),
+            EnumIntegerType::U16 => quote!(uint16_t),
+            EnumIntegerType::U32 => quote!(uint32_t),
+            EnumIntegerType::U64 => quote!(uint64_t),
+        };
+
         let hpp = quote! {
             #hpp_includes
 
@@ -1481,7 +1516,7 @@ impl QuotedObject {
 
             namespace rerun::#quoted_namespace {
                 #quoted_docs
-                enum class #deprecation_notice #type_ident : uint8_t {
+                enum class #deprecated_notice #type_ident : #enum_integer_type {
                     #(#field_declarations,)*
                 };
             }
@@ -1529,7 +1564,10 @@ fn single_field_constructor_methods(
     //
     // Note that we previously we tried to do a general forwarding constructor via variadic templates,
     // but ran into some issues when init archetypes with initializer lists.
-    if let Type::Object(field_type_fqname) = &field.typ {
+    if let Type::Object {
+        fqname: field_type_fqname,
+    } = &field.typ
+    {
         let field_type_obj = &objects[field_type_fqname];
         if field_type_obj.fields.len() == 1 && !field_type_obj.is_attr_set(ATTR_CPP_NO_FIELD_CTORS)
         {
@@ -1607,7 +1645,7 @@ fn add_copy_assignment_and_constructor(
 /// If the type forwards to another rerun defined type, returns the fully qualified name of that type.
 fn transparent_forwarded_fqname(obj: &Object) -> Option<&str> {
     if obj.is_arrow_transparent() && obj.fields.len() == 1 && !obj.fields[0].is_nullable {
-        if let Type::Object(fqname) = &obj.fields[0].typ {
+        if let Type::Object { fqname } = &obj.fields[0].typ {
             return Some(fqname);
         }
     }
@@ -1637,7 +1675,9 @@ fn arrow_data_type_method(
             hpp_declarations.insert("arrow", ForwardDecl::Class(format_ident!("DataType")));
 
             let quoted_datatype = quote_arrow_datatype(
-                &Type::Object(obj.fqname.clone()),
+                &Type::Object {
+                    fqname: obj.fqname.clone(),
+                },
                 objects,
                 cpp_includes,
                 true,
@@ -1872,7 +1912,7 @@ fn quote_fill_arrow_array_builder(
 
     if obj.is_arrow_transparent() {
         let field = &obj.fields[0];
-        if let Type::Object(fqname) = &field.typ {
+        if let Type::Object { fqname } = &field.typ {
             if field.is_nullable {
                 quote! {
                     (void)builder;
@@ -1926,8 +1966,8 @@ fn quote_fill_arrow_array_builder(
                 }
             }
 
-            // C-style enum, encoded as a sparse arrow union
-            ObjectClass::Enum => {
+            // C-style enum, encoded as arrow integer array.
+            ObjectClass::Enum(_) => {
                 quote! {
                     #parameter_check
                     ARROW_RETURN_NOT_OK(#builder->Reserve(static_cast<int64_t>(num_elements)));
@@ -1985,7 +2025,7 @@ fn quote_fill_arrow_array_builder(
                                     ElementType::Float32 => Some("FloatBuilder"),
                                     ElementType::Float64 => Some("DoubleBuilder"),
                                     ElementType::String => Some("StringBuilder"),
-                                    ElementType::Object(_) => None,
+                                    ElementType::Object{..} => None,
                                 };
 
                                 if let Some(type_builder_name) = type_builder_name {
@@ -2278,7 +2318,7 @@ fn quote_append_single_value_to_builder(
                         }
                     }
                 }
-                ElementType::Object(fqname) => {
+                ElementType::Object { fqname } => {
                     let fqname = quote_fqname_as_type_path(includes, fqname);
                     let field_ptr_accessor = quote_field_ptr_access(typ, value_access);
                     quote! {
@@ -2289,7 +2329,7 @@ fn quote_append_single_value_to_builder(
                 }
             }
         }
-        Type::Object(fqname) => {
+        Type::Object { fqname } => {
             let fqname = quote_fqname_as_type_path(includes, fqname);
             quote!(RR_RETURN_NOT_OK(Loggable<#fqname>::fill_arrow_array_builder(#value_builder, &#value_access, 1));)
         }
@@ -2384,7 +2424,7 @@ fn quote_archetype_unserialized_type(
             let elem_type = quote_element_type(hpp_includes, elem_type);
             quote! { Collection<#elem_type> }
         }
-        Type::Object(fqname) => quote_fqname_as_type_path(hpp_includes, fqname),
+        Type::Object { fqname } => quote_fqname_as_type_path(hpp_includes, fqname),
         _ => panic!("Only vectors and objects are allowed in archetypes."),
     }
 }
@@ -2443,7 +2483,7 @@ fn quote_field_type(includes: &mut Includes, obj_field: &ObjectField) -> TokenSt
             includes.insert_rerun("collection.hpp");
             quote! { rerun::Collection<#elem_type>  }
         }
-        Type::Object(fqname) => {
+        Type::Object { fqname } => {
             let type_name = quote_fqname_as_type_path(includes, fqname);
             quote! { #type_name  }
         }
@@ -2492,7 +2532,7 @@ fn quote_element_type(includes: &mut Includes, typ: &ElementType) -> TokenStream
             includes.insert_system("string");
             quote! { std::string }
         }
-        ElementType::Object(fqname) => quote_fqname_as_type_path(includes, fqname),
+        ElementType::Object { fqname } => quote_fqname_as_type_path(includes, fqname),
     }
 }
 
@@ -2513,11 +2553,10 @@ fn quote_obj_docs(reporter: &Reporter, objects: &Objects, obj: &Object) -> Token
         *first_line = format!("**{}**: {}", obj.kind.singular_name(), first_line);
     }
 
-    if obj.is_experimental() {
+    if let Some(docline_summary) = &obj.state.docline_summary() {
         lines.push(String::new());
-        lines.push(
-            "⚠ **This is an experimental API! It is not fully supported, and is likely to change significantly in future versions.**".to_owned(),
-        );
+        lines.push(docline_summary.replace("⚠️", "⚠").clone());
+        lines.push(String::new());
     }
 
     quote_doc_lines(&lines)
@@ -2553,7 +2592,10 @@ fn lines_from_docs(reporter: &Reporter, objects: &Objects, docs: &Docs) -> Vec<S
             } = &example.base;
 
             for line in &example.lines {
-                assert!(!line.contains("```"), "Example {path:?} contains ``` in it, so we can't embed it in the C++ API docs.");
+                assert!(
+                    !line.contains("```"),
+                    "Example {path:?} contains ``` in it, so we can't embed it in the C++ API docs."
+                );
             }
 
             if let Some(title) = title {
@@ -2632,7 +2674,7 @@ fn quote_arrow_datatype(
             quote!(arrow::fixed_size_list(#quoted_field, #quoted_length))
         }
 
-        Type::Object(fqname) => {
+        Type::Object { fqname } => {
             // TODO(andreas): We're no`t emitting the actual extension types here yet which is why we're skipping the extension type at top level.
             // Currently, we wrap only Components in extension types but this is done in `rerun_c`.
             // In the future we'll add the extension type here to the schema.
@@ -2653,10 +2695,9 @@ fn quote_arrow_datatype(
                     ObjectClass::Struct => {
                         quote!(arrow::struct_({ #(#quoted_fields,)* }))
                     }
-                    ObjectClass::Enum => {
-                        quote! {
-                            arrow::uint8()
-                        }
+                    ObjectClass::Enum(integer_type) => {
+                        let integer_type = integer_type.to_type();
+                        quote_arrow_datatype(&integer_type, objects, includes, false)
                     }
                     ObjectClass::Union => {
                         quote! {
@@ -2759,10 +2800,8 @@ fn quote_loggable_hpp_and_cpp(
     let methods_cpp = methods.iter().map(|m| m.to_cpp_tokens(&loggable_type_name));
     let hide_from_docs_comment = quote_hide_from_docs();
 
-    hpp_includes.insert_rerun("component_descriptor.hpp");
-
     let (deprecation_ignore_start, deprecation_ignore_end) =
-        quote_deprecation_ignore_start_and_end(hpp_includes, obj.deprecation_notice().is_some());
+        quote_deprecation_ignore_start_and_end(hpp_includes, obj.is_deprecated());
 
     let hpp = quote! {
         #deprecation_ignore_start
@@ -2773,7 +2812,7 @@ fn quote_loggable_hpp_and_cpp(
             #hide_from_docs_comment
             template<>
             struct #loggable_type_name {
-                static constexpr ComponentDescriptor Descriptor = #fqname;
+                static constexpr std::string_view ComponentType = #fqname;
                 #NEWLINE_TOKEN
                 #NEWLINE_TOKEN
                 #(#methods_hpp)*
@@ -2796,11 +2835,11 @@ fn quote_loggable_hpp_and_cpp(
     (hpp, cpp)
 }
 
-fn quote_deprecation_notice(obj: &Object) -> TokenStream {
-    if let Some(deprecation_notice) = obj.deprecation_notice() {
+fn quote_deprecated_notice(obj: &Object) -> TokenStream {
+    if let Some(deprecation_summary) = obj.deprecation_summary() {
         // https://en.cppreference.com/w/cpp/language/attributes/deprecated
         quote! {
-            [[deprecated(#deprecation_notice)]]
+            [[deprecated(#deprecation_summary)]]
         }
     } else {
         quote! {}

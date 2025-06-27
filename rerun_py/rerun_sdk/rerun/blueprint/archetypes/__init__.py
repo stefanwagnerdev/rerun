@@ -5,6 +5,7 @@ from __future__ import annotations
 from .background import Background
 from .container_blueprint import ContainerBlueprint
 from .dataframe_query import DataframeQuery
+from .entity_behavior import EntityBehavior
 from .force_center import ForceCenter
 from .force_collision_radius import ForceCollisionRadius
 from .force_link import ForceLink
@@ -20,16 +21,19 @@ from .scalar_axis import ScalarAxis
 from .tensor_scalar_mapping import TensorScalarMapping
 from .tensor_slice_selection import TensorSliceSelection
 from .tensor_view_fit import TensorViewFit
+from .time_axis import TimeAxis
 from .view_blueprint import ViewBlueprint
 from .view_contents import ViewContents
 from .viewport_blueprint import ViewportBlueprint
 from .visible_time_ranges import VisibleTimeRanges
 from .visual_bounds2d import VisualBounds2D
+from .visualizer_overrides import VisualizerOverrides
 
 __all__ = [
     "Background",
     "ContainerBlueprint",
     "DataframeQuery",
+    "EntityBehavior",
     "ForceCenter",
     "ForceCollisionRadius",
     "ForceLink",
@@ -45,9 +49,11 @@ __all__ = [
     "TensorScalarMapping",
     "TensorSliceSelection",
     "TensorViewFit",
+    "TimeAxis",
     "ViewBlueprint",
     "ViewContents",
     "ViewportBlueprint",
     "VisibleTimeRanges",
     "VisualBounds2D",
+    "VisualizerOverrides",
 ]

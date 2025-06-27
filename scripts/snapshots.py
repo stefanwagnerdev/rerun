@@ -10,9 +10,9 @@ pixi run snapshot --help
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterator
 from pathlib import Path
 from sys import stderr
-from typing import Iterator
 
 import numpy as np
 import PIL.Image as Image
@@ -58,7 +58,7 @@ def blueprint(path: Path) -> rrb.Blueprint:
                         contents=["/original", "/new"],
                         name="Overlay (opacity)",
                         overrides={
-                            "/new": [rr.components.Opacity(0.5)],
+                            "/new": rr.Image.from_fields(opacity=0.5),
                         },
                     ),
                     name='NOTE: Select the "new" entity visualizer and play with the "Opacity" component',
@@ -72,7 +72,7 @@ def blueprint(path: Path) -> rrb.Blueprint:
 
 
 def log_failed_snapshot_tests(original_path: Path, new_path: Path, diff_path: Path, args: argparse.Namespace) -> None:
-    recording = rr.new_recording(f"rerun_example_{original_path.stem}")
+    recording = rr.RecordingStream(f"rerun_example_{original_path.stem}")
 
     with recording:
         default_blueprint = blueprint(original_path)
@@ -80,9 +80,10 @@ def log_failed_snapshot_tests(original_path: Path, new_path: Path, diff_path: Pa
         if args.stdout:
             rr.stdout(default_blueprint=default_blueprint)
         elif args.serve:
-            rr.serve(default_blueprint=default_blueprint)
+            connect_to = rr.serve_grpc(default_blueprint=default_blueprint)
+            rr.serve_web_viewer(open_browser=True, connect_to=connect_to)
         elif args.connect:
-            rr.connect(args.addr, default_blueprint=default_blueprint)
+            rr.connect_grpc(args.addr, default_blueprint=default_blueprint)
         elif args.save is not None:
             rr.save(args.save, default_blueprint=default_blueprint)
         elif not args.headless:
@@ -95,12 +96,13 @@ def log_failed_snapshot_tests(original_path: Path, new_path: Path, diff_path: Pa
         rr.log(
             "doc/tabs",
             rr.TextDocument(
-                "### Click on one of the tabs below to show the Original/New/Diff images.", media_type="text/markdown"
+                "### Click on one of the tabs below to show the Original/New/Diff images.",
+                media_type="text/markdown",
             ),
         )
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Logs all failed snapshot tests for comparison in rerun")
     parser.add_argument("-p", "--package", type=str, help="Only consider the provided package")
     parser.add_argument("--clean", action="store_true", help="Clean snapshot files instead of displaying them")

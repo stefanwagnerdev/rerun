@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -25,17 +24,18 @@ class DepthMeter(datatypes.Float32, ComponentMixin):
 
     Note that the only effect on 2D views is the physical depth values shown when hovering the image.
     In 3D views on the other hand, this affects where the points of the point cloud are placed.
+
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
     """
 
     _BATCH_TYPE = None
     # You can define your own __init__ function as a member of DepthMeterExt in depth_meter_ext.py
 
     # Note: there are no fields here because DepthMeter delegates to datatypes.Float32
-    pass
 
 
 class DepthMeterBatch(datatypes.Float32Batch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.DepthMeter")
+    _COMPONENT_TYPE: str = "rerun.components.DepthMeter"
 
 
 # This is patched in late to avoid circular dependencies.

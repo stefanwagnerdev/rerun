@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -22,11 +21,10 @@ class MarkerSize(datatypes.Float32, ComponentMixin):
     # You can define your own __init__ function as a member of MarkerSizeExt in marker_size_ext.py
 
     # Note: there are no fields here because MarkerSize delegates to datatypes.Float32
-    pass
 
 
 class MarkerSizeBatch(datatypes.Float32Batch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.MarkerSize")
+    _COMPONENT_TYPE: str = "rerun.components.MarkerSize"
 
 
 # This is patched in late to avoid circular dependencies.

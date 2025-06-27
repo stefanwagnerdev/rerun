@@ -1,15 +1,18 @@
+use crate::view_query::Query;
+use egui::PopupCloseBehavior;
+use egui::containers::menu::{MenuButton, MenuConfig};
+use re_chunk_store::ColumnDescriptor;
+use re_log_types::{
+    EntityPath, ResolvedTimeRange, TimeInt, TimeType, Timeline, TimelineName, TimestampFormat,
+};
+use re_sorbet::ColumnSelector;
+use re_types::ComponentIdentifier;
+use re_types::blueprint::components;
+use re_ui::{TimeDragValue, UiExt as _, list_item};
+use re_viewer_context::{ViewId, ViewSystemExecutionError, ViewerContext};
 use std::collections::{BTreeSet, HashSet};
 
-use re_chunk_store::{ColumnDescriptor, ColumnSelector};
-use re_log_types::{
-    EntityPath, ResolvedTimeRange, TimeInt, TimeType, TimeZone, Timeline, TimelineName,
-};
-use re_types::blueprint::components;
-use re_types_core::{ComponentName, ComponentNameSet};
-use re_ui::{list_item, UiExt};
-use re_viewer_context::{TimeDragValue, ViewId, ViewSystemExecutionError, ViewerContext};
-
-use crate::view_query::Query;
+type ComponentIdentifierSet = std::collections::BTreeSet<ComponentIdentifier>;
 
 // UI implementation
 impl Query {
@@ -66,9 +69,14 @@ impl Query {
 
             ui.list_item_flat_noninteractive(
                 list_item::PropertyContent::new("Start")
-                    .action_button_with_enabled(&re_ui::icons::RESET, start != TimeInt::MIN, || {
-                        reset_start = true;
-                    })
+                    .action_button_with_enabled(
+                        &re_ui::icons::RESET,
+                        "Reset",
+                        start != TimeInt::MIN,
+                        || {
+                            reset_start = true;
+                        },
+                    )
                     .value_fn(|ui, _| {
                         if let Some((time_drag_value, timeline_type)) = &time_drag_value_and_type {
                             let response = time_boundary_ui(
@@ -76,7 +84,7 @@ impl Query {
                                 time_drag_value,
                                 None,
                                 *timeline_type,
-                                ctx.app_options().time_zone,
+                                ctx.app_options().timestamp_format,
                                 &mut start,
                             );
 
@@ -101,9 +109,14 @@ impl Query {
 
             ui.list_item_flat_noninteractive(
                 list_item::PropertyContent::new("End")
-                    .action_button_with_enabled(&re_ui::icons::RESET, end != TimeInt::MAX, || {
-                        reset_to = true;
-                    })
+                    .action_button_with_enabled(
+                        &re_ui::icons::RESET,
+                        "Reset",
+                        end != TimeInt::MAX,
+                        || {
+                            reset_to = true;
+                        },
+                    )
                     .value_fn(|ui, _| {
                         if let Some((time_drag_value, timeline_type)) = &time_drag_value_and_type {
                             let response = time_boundary_ui(
@@ -111,7 +124,7 @@ impl Query {
                                 time_drag_value,
                                 Some(start),
                                 *timeline_type,
-                                ctx.app_options().time_zone,
+                                ctx.app_options().timestamp_format,
                                 &mut end,
                             );
 
@@ -160,16 +173,10 @@ impl Query {
 
         let original_filter_is_not_null = self.filter_is_not_null_raw()?;
 
-        let (mut active, filter_entity, filter_component) = original_filter_is_not_null
+        let (mut active, filter) = original_filter_is_not_null
             .as_ref()
-            .map(|filter| {
-                (
-                    filter.active(),
-                    Some(filter.entity_path()),
-                    Some(filter.component_name()),
-                )
-            })
-            .unwrap_or((false, None, None));
+            .map(|filter| (filter.active(), Some(filter.column_selector())))
+            .unwrap_or((false, None));
 
         //
         // Filter active?
@@ -189,17 +196,19 @@ impl Query {
                 ui.spacing_mut().item_spacing.y = 0.0;
 
                 ui.list_item_flat_noninteractive(
-                    list_item::PropertyContent::new("Entity")
-                        .value_text(filter_entity.unwrap_or_else(EntityPath::root).to_string()),
+                    list_item::PropertyContent::new("Entity").value_text(
+                        filter
+                            .as_ref()
+                            .map(|f| f.entity_path.clone())
+                            .unwrap_or_else(EntityPath::root)
+                            .to_string(),
+                    ),
                 )
                 .on_disabled_hover_text("Select an existing timeline to edit this property");
 
                 ui.list_item_flat_noninteractive(
-                    list_item::PropertyContent::new("Component").value_text(
-                        filter_component
-                            .unwrap_or_else(|| ComponentName::from("-"))
-                            .short_name(),
-                    ),
+                    list_item::PropertyContent::new("Component")
+                        .value_text(filter.as_ref().map(|f| f.component.as_str()).unwrap_or("-")),
                 )
                 .on_disabled_hover_text("Select an existing timeline to edit this property");
             });
@@ -213,8 +222,13 @@ impl Query {
 
         let all_entities = all_pov_entities_for_view(ctx, view_id, timeline);
 
-        let mut filter_entity = filter_entity
-            .and_then(|entity| all_entities.contains(&entity).then_some(entity))
+        let mut filter_entity = filter
+            .as_ref()
+            .and_then(|filter| {
+                all_entities
+                    .contains(&filter.entity_path)
+                    .then_some(filter.entity_path.clone())
+            })
             .or_else(|| all_entities.iter().next().cloned())
             .unwrap_or_else(EntityPath::root);
 
@@ -222,40 +236,49 @@ impl Query {
         // Filter component
         //
 
-        let all_components = ctx
+        let mut all_components = ctx
             .recording_engine()
             .store()
             .all_components_on_timeline_sorted(timeline, &filter_entity)
             .unwrap_or_default();
 
-        // The list of suggested components is build as follows:
-        // - consider all indicator components
+        all_components.retain(|descr| !descr.is_indicator_component());
+
+        // The list of suggested components is built as follows:
+        // - consider all component descriptors that have an archetype
         // - for the matching archetypes, take all required components
         // - keep those that are actually present
         let suggested_components = || {
             all_components
                 .iter()
                 .filter_map(|c| {
-                    c.indicator_component_archetype()
-                        .and_then(|archetype_short_name| {
-                            ctx.reflection()
-                                .archetype_reflection_from_short_name(&archetype_short_name)
-                        })
+                    c.archetype.as_ref().and_then(|archetype| {
+                        ctx.reflection()
+                            .archetypes
+                            .get(archetype)
+                            .map(|archetype_reflection| (archetype, archetype_reflection))
+                    })
                 })
-                .flat_map(|archetype_reflection| {
-                    archetype_reflection
-                        .required_fields()
-                        .map(|field| field.component_name)
+                .flat_map(|(archetype, archetype_reflection)| {
+                    archetype_reflection.required_fields().filter_map(|field| {
+                        let descr = field.component_descriptor(*archetype);
+                        (!descr.is_indicator_component()).then_some(descr)
+                    })
                 })
-                .filter(|c| all_components.contains(c))
-                .collect::<ComponentNameSet>()
+                .filter_map(|c| all_components.contains(&c).then_some(c.component))
+                .collect::<ComponentIdentifierSet>()
         };
 
         // If the currently saved component, we auto-switch it to a reasonable one.
-        let mut filter_component = filter_component
-            .and_then(|component| all_components.contains(&component).then_some(component))
+        let mut filter_component = filter
+            .and_then(|component_sel| {
+                all_components
+                    .iter()
+                    .any(|descr| descr.component.as_str() == component_sel.component)
+                    .then_some(component_sel.component.into())
+            })
             .or_else(|| suggested_components().first().copied())
-            .unwrap_or_else(|| ComponentName::from("-"));
+            .unwrap_or_else(|| ComponentIdentifier::from("-"));
 
         //
         // UI for filter entity and component
@@ -280,11 +303,14 @@ impl Query {
             ui.list_item_flat_noninteractive(
                 list_item::PropertyContent::new("Component").value_fn(|ui, _| {
                     egui::ComboBox::new("pov_component", "")
-                        .selected_text(filter_component.short_name())
+                        .selected_text(filter_component.as_str())
                         .show_ui(ui, |ui| {
-                            for component in all_components {
-                                let label = component.short_name();
-                                ui.selectable_value(&mut filter_component, component, label);
+                            for descr in all_components {
+                                ui.selectable_value(
+                                    &mut filter_component,
+                                    descr.component,
+                                    descr.component.as_str(),
+                                );
                             }
                         });
                 }),
@@ -294,11 +320,12 @@ impl Query {
         //
         // Save filter if changed
         //
-
         let filter_is_not_null =
-            components::FilterIsNotNull::new(active, &filter_entity, filter_component);
+            components::FilterIsNotNull::new(active, &filter_entity, filter_component.to_string());
 
-        if original_filter_is_not_null.as_ref() != Some(&filter_is_not_null) {
+        if original_filter_is_not_null.is_some()
+            && original_filter_is_not_null.as_ref() != Some(&filter_is_not_null)
+        {
             self.save_filter_is_not_null(ctx, &filter_is_not_null);
         }
 
@@ -360,6 +387,24 @@ impl Query {
 
             ui.add_space(12.0);
 
+            // TODO(#9921): add support for showing Row ID column
+            if false {
+                let mut show_row_id = view_columns
+                    .iter()
+                    .any(|d| matches!(d, ColumnDescriptor::RowId(_)));
+                if ui
+                    .re_checkbox(&mut show_row_id, "RowID")
+                    .on_disabled_hover_text("The query timeline must always be visible")
+                    .changed()
+                {
+                    if show_row_id {
+                        new_selected_columns.insert(ColumnSelector::RowId);
+                    } else {
+                        new_selected_columns.remove(&ColumnSelector::RowId);
+                    }
+                }
+            }
+
             //
             // Time columns
             //
@@ -387,7 +432,7 @@ impl Query {
 
                 ui.add_enabled_ui(is_enabled, |ui| {
                     if ui
-                        .re_checkbox(&mut is_visible, column.short_name())
+                        .re_checkbox(&mut is_visible, column.display_name())
                         .on_disabled_hover_text("The query timeline must always be visible")
                         .changed()
                     {
@@ -420,7 +465,7 @@ impl Query {
                 let mut is_visible = selected_columns.contains(&column_selector);
 
                 if ui
-                    .re_checkbox(&mut is_visible, column.short_name())
+                    .re_checkbox(&mut is_visible, column.display_name())
                     .changed()
                 {
                     if is_visible {
@@ -434,11 +479,16 @@ impl Query {
 
         ui.list_item_flat_noninteractive(list_item::PropertyContent::new("Columns").value_fn(
             |ui, _| {
-                egui::menu::menu_button(ui, &visible_count_label, |ui| {
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, modal_ui)
-                });
+                MenuButton::new(&visible_count_label)
+                    .config(
+                        MenuConfig::default()
+                            .close_behavior(PopupCloseBehavior::CloseOnClickOutside),
+                    )
+                    .ui(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, modal_ui)
+                    });
             },
         ));
 
@@ -524,7 +574,7 @@ fn time_boundary_ui(
     time_drag_value: &TimeDragValue,
     low_bound_override: Option<TimeInt>,
     timeline_typ: TimeType,
-    time_zone: TimeZone,
+    timestamp_format: TimestampFormat,
     time: &mut TimeInt,
 ) -> egui::Response {
     if *time == TimeInt::MAX {
@@ -542,17 +592,14 @@ fn time_boundary_ui(
         }
         response
     } else {
-        match timeline_typ {
-            TimeType::Time => {
-                time_drag_value
-                    .temporal_drag_value_ui(ui, time, true, low_bound_override, time_zone)
-                    .0
-            }
-
-            TimeType::Sequence => {
-                time_drag_value.sequence_drag_value_ui(ui, time, true, low_bound_override)
-            }
-        }
+        time_drag_value.drag_value_ui(
+            ui,
+            timeline_typ,
+            time,
+            true,
+            low_bound_override,
+            timestamp_format,
+        )
     }
 }
 

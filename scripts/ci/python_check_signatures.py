@@ -15,7 +15,7 @@ import sys
 import textwrap
 from inspect import Parameter, Signature
 from pathlib import Path
-from typing import Any
+from typing import Any, Union
 
 import parso
 from colorama import Fore, Style, init as colorama_init
@@ -23,7 +23,7 @@ from colorama import Fore, Style, init as colorama_init
 colorama_init()
 
 
-def print_colored_diff(runtime, stub):
+def print_colored_diff(runtime: str, stub: str) -> None:
     # Split the strings into lines
     runtime_lines = runtime.splitlines()
     stub_lines = stub.splitlines()
@@ -44,12 +44,13 @@ def print_colored_diff(runtime, stub):
 
 
 class APIDef:
-    def __init__(self, name: str, signature: Signature, doc: str | None):
+    def __init__(self, name: str, signature: Signature, internal_object: bool, doc: str | None) -> None:
         self.name = name
         self.signature = signature
+        self.internal_object = internal_object
         self.doc = inspect.cleandoc(doc) if doc else None
 
-    def __str__(self):
+    def __str__(self) -> str:
         doclines = (self.doc or "").split("\n")
         if len(doclines) == 1:
             docstring = f'"""{doclines[0]}"""'
@@ -58,16 +59,25 @@ class APIDef:
         docstring = textwrap.indent(docstring, "    ")
         return f"{self.name}{self.signature}:\n{docstring}"
 
-    def __eq__(self, other):
-        if self.name in ("__init__", "__iter__"):
-            # Ignore the signature of __init__ and __new__ methods
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, APIDef):
+            return NotImplemented
+
+        if self.name in ("__init__", "__iter__", "__len__"):
+            # pyo3 has a special way to handle these methods that makes it impossible to match everything.
             # TODO(#7779): Remove this special case once we have a better way to handle these methods
+            return self.name == other.name and self.signature == other.signature
+        elif self.name in ("__getitem__"):
+            # TODO(#7779): It's somehow even worse for these.
+            return self.name == other.name
+        elif self.internal_object:
+            # We don't care about docstrings for internal objects
             return self.name == other.name and self.signature == other.signature
         else:
             return self.name == other.name and self.signature == other.signature and self.doc == other.doc
 
 
-TotalSignature = dict[str, APIDef | dict[str, APIDef | str]]
+TotalSignature = dict[str, Union[APIDef, dict[str, APIDef]]]
 
 
 def parse_function_signature(node: Any) -> APIDef:
@@ -108,10 +118,10 @@ def parse_function_signature(node: Any) -> APIDef:
         if child.type == "suite":
             first_child = child.children[1]
             if first_child.type == "simple_stmt" and first_child.children[0].type == "string":
-                doc = first_child.children[0].value.strip('"""')
+                doc = first_child.children[0].value.replace('"""', "")
 
     sig = Signature(parameters=params)
-    return APIDef(node.name.value, sig, doc)
+    return APIDef(node.name.value, sig, internal_object=False, doc=doc)
 
 
 def load_stub_signatures(pyi_file: Path) -> TotalSignature:
@@ -129,7 +139,6 @@ def load_stub_signatures(pyi_file: Path) -> TotalSignature:
 
         elif node.type == "classdef":
             class_name = node.name.value
-
             class_def = {}
 
             doc = None
@@ -137,7 +146,7 @@ def load_stub_signatures(pyi_file: Path) -> TotalSignature:
                 if child.type == "suite":
                     first_child = child.children[1]
                     if first_child.type == "simple_stmt" and first_child.children[0].type == "string":
-                        doc = first_child.children[0].value.strip('"""')
+                        doc = first_child.children[0].value.replace('"""', "")
             if doc is not None:
                 class_def["__doc__"] = doc
 
@@ -163,13 +172,15 @@ def load_runtime_signatures(module_name: str) -> TotalSignature:
     # Get top-level functions and classes
     for name, obj in inspect.getmembers(module):
         if inspect.isfunction(obj):
-            api_def = APIDef(name, inspect.signature(obj), obj.__doc__)
+            api_def = APIDef(name, inspect.signature(obj), False, obj.__doc__)
             signatures[name] = api_def
         elif inspect.isbuiltin(obj):
-            api_def = APIDef(name, inspect.signature(obj), obj.__doc__)
+            api_def = APIDef(name, inspect.signature(obj), False, obj.__doc__)
             signatures[name] = api_def
         elif inspect.isclass(obj):
             class_def = {}
+            is_internal_class = name.endswith("Internal")
+
             # Get methods within the class
             for method_name, method_obj in inspect.getmembers(obj):
                 # Need special handling for __init__ methods because pyo3 doesn't expose them as functions
@@ -180,17 +191,19 @@ def load_runtime_signatures(module_name: str) -> TotalSignature:
                     class_def[method_name] = parse_function_signature(parsed)
                     continue
                 try:
-                    api_def = APIDef(method_name, inspect.signature(method_obj), method_obj.__doc__)
+                    api_def = APIDef(method_name, inspect.signature(method_obj), is_internal_class, method_obj.__doc__)
                     class_def[method_name] = api_def
                 except Exception:
                     pass
             # Get property getters
             for method_name, method_obj in inspect.getmembers(
-                obj, lambda o: o.__class__.__name__ == "getset_descriptor"
+                obj,
+                lambda o: o.__class__.__name__ == "getset_descriptor",
             ):
                 api_def = APIDef(
                     method_name,
                     Signature(parameters=[Parameter("self", Parameter.POSITIONAL_ONLY)]),
+                    is_internal_class,
                     method_obj.__doc__,
                 )
                 class_def[method_name] = api_def
@@ -208,6 +221,8 @@ def compare_signatures(stub_signatures: TotalSignature, runtime_signatures: Tota
         if isinstance(stub_signature, dict):
             if name in runtime_signatures:
                 runtime_class_signature = runtime_signatures.get(name)
+                is_internal_class = name.endswith("Internal")
+
                 if not isinstance(runtime_class_signature, dict):
                     print()
                     print(f"{name} signature mismatch:")
@@ -216,7 +231,7 @@ def compare_signatures(stub_signatures: TotalSignature, runtime_signatures: Tota
                 for method_name, stub_method_signature in stub_signature.items():
                     if isinstance(stub_method_signature, str):
                         continue
-                    if stub_method_signature.doc is None:
+                    if stub_method_signature.doc is None and not is_internal_class:
                         print()
                         print(f"{name}.{method_name} missing docstring")
                         result += 1

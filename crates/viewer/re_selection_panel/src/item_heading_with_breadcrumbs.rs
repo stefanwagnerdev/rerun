@@ -16,7 +16,7 @@ use re_chunk::EntityPath;
 use re_data_ui::item_ui::{cursor_interact_with_selectable, guess_instance_path_icon};
 use re_entity_db::InstancePath;
 use re_log_types::EntityPathPart;
-use re_ui::{icons, list_item, DesignTokens, SyntaxHighlighting, UiExt as _};
+use re_ui::{SyntaxHighlighting as _, UiExt as _, icons, list_item};
 use re_viewer_context::{Contents, Item, ViewId, ViewerContext};
 use re_viewport_blueprint::ViewportBlueprint;
 
@@ -31,8 +31,10 @@ pub fn item_heading_with_breadcrumbs(
 ) {
     re_tracing::profile_function!();
 
+    let tokens = ui.tokens();
+
     ui.list_item()
-        .with_height(DesignTokens::title_bar_height())
+        .with_height(tokens.title_bar_height())
         .interactive(false)
         .selected(true)
         .show_flat(
@@ -51,10 +53,11 @@ pub fn item_heading_with_breadcrumbs(
 
                 // First the C>R>U>M>B>S>
                 {
+                    let breadcrumb_text_color = ui.tokens().breadcrumb_text_color;
                     let previous_style = ui.style().clone();
                     // Dimmer colors for breadcrumbs
                     let visuals = ui.visuals_mut();
-                    visuals.widgets.inactive.fg_stroke.color = egui::hex_color!("#6A8CD0"); // TODO(#3133): use design tokens
+                    visuals.widgets.inactive.fg_stroke.color = breadcrumb_text_color;
                     item_bread_crumbs_ui(ctx, viewport, ui, item);
                     ui.set_style(previous_style);
                 }
@@ -73,7 +76,12 @@ fn item_bread_crumbs_ui(
     item: &Item,
 ) {
     match item {
-        Item::AppId(_) | Item::DataSource(_) | Item::StoreId(_) => {
+        Item::AppId(_)
+        | Item::DataSource(_)
+        | Item::StoreId(_)
+        | Item::RedapEntry(_)
+        | Item::RedapServer(_)
+        | Item::TableId(_) => {
             // These have no bread crumbs, at least not currently.
             // I guess one could argue that the `StoreId` should have the `AppId` as its ancestor?
         }
@@ -192,13 +200,16 @@ fn last_part_of_item_heading(
         | Item::DataSource { .. }
         | Item::Container { .. }
         | Item::View { .. }
-        | Item::StoreId { .. } => true,
+        | Item::TableId { .. }
+        | Item::StoreId { .. }
+        | Item::RedapEntry(_)
+        | Item::RedapServer(_) => true,
 
         Item::InstancePath { .. } | Item::DataResult { .. } | Item::ComponentPath { .. } => false,
     };
 
     let button = if with_icon {
-        egui::Button::image_and_text(icon.as_image(), label).image_tint_follows_text_color(true)
+        icon.as_button_with_label(ui.tokens(), label)
     } else {
         egui::Button::new(label)
     };
@@ -230,8 +241,7 @@ fn viewport_breadcrumbs(
         tooltip,
     } = ItemTitle::from_contents(ctx, viewport, &contents);
 
-    let mut response =
-        ui.add(egui::Button::image(icon.as_image()).image_tint_follows_text_color(true));
+    let mut response = ui.add(icon.as_button());
     if let Some(tooltip) = tooltip {
         response = response.on_hover_text(tooltip);
     }
@@ -244,7 +254,7 @@ pub fn separator_icon_ui(ui: &mut egui::Ui) {
     ui.add(
         icons::BREADCRUMBS_SEPARATOR
             .as_image()
-            .tint(ui.visuals().text_color().gamma_multiply(0.65)),
+            .tint(ui.tokens().breadcrumb_separator_color),
     );
 }
 
@@ -285,7 +295,7 @@ fn entity_path_breadcrumbs(
             // just to make it clear that this is a different kind of hierarchy.
             &icons::RECORDING // streams hierarchy
         };
-        egui::Button::image(icon.as_image()).image_tint_follows_text_color(true)
+        icon.as_button()
     };
 
     let response = ui.add(button);

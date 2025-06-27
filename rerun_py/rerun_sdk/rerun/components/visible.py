@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -22,11 +21,10 @@ class Visible(datatypes.Bool, ComponentMixin):
     # You can define your own __init__ function as a member of VisibleExt in visible_ext.py
 
     # Note: there are no fields here because Visible delegates to datatypes.Bool
-    pass
 
 
 class VisibleBatch(datatypes.BoolBatch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.Visible")
+    _COMPONENT_TYPE: str = "rerun.components.Visible"
 
 
 # This is patched in late to avoid circular dependencies.

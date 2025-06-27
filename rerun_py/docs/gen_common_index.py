@@ -84,18 +84,20 @@ SECTION_TABLE: Final[list[Section]] = [
         title="Initialization functions",
         func_list=[
             "init",
-            "connect",
+            "set_sinks",
             "connect_grpc",
             "disconnect",
             "save",
             "send_blueprint",
-            "serve",
-            "serve_web",
+            "serve_web",  # Deprecated, but still around.
+            "serve_grpc",
+            "serve_web_viewer",
             "spawn",
             "memory_recording",
             "notebook_show",
             "legacy_notebook_show",
         ],
+        class_list=["RecordingStream"],
     ),
     Section(
         title="Logging functions",
@@ -108,6 +110,7 @@ SECTION_TABLE: Final[list[Section]] = [
     Section(
         title="Timeline functions",
         func_list=[
+            "set_time",
             "set_time_sequence",
             "set_time_seconds",
             "set_time_nanos",
@@ -121,6 +124,7 @@ SECTION_TABLE: Final[list[Section]] = [
             "send_columns",
         ],
         class_list=[
+            "TimeColumn",
             "TimeNanosColumn",
             "TimeSecondsColumn",
             "TimeSequenceColumn",
@@ -154,8 +158,12 @@ SECTION_TABLE: Final[list[Section]] = [
     # These are tables but don't need their own pages since they refer to types that
     # were added in the pages up above
     Section(
-        title="Clearing Entities",
-        class_list=["archetypes.Clear"],
+        title="General",
+        class_list=[
+            "archetypes.Clear",
+            "blueprint.archetypes.EntityBehavior",
+            "archetypes.RecordingProperties",
+        ],
         gen_page=False,
     ),
     Section(
@@ -180,6 +188,7 @@ SECTION_TABLE: Final[list[Section]] = [
     Section(
         title="Video",
         class_list=[
+            "archetypes.VideoStream",
             "archetypes.AssetVideo",
             "archetypes.VideoFrameReference",
         ],
@@ -189,9 +198,9 @@ SECTION_TABLE: Final[list[Section]] = [
         title="Plotting",
         class_list=[
             "archetypes.BarChart",
-            "archetypes.Scalar",
-            "archetypes.SeriesLine",
-            "archetypes.SeriesPoint",
+            "archetypes.Scalars",
+            "archetypes.SeriesLines",
+            "archetypes.SeriesPoints",
         ],
         gen_page=False,
     ),
@@ -204,6 +213,7 @@ SECTION_TABLE: Final[list[Section]] = [
             "archetypes.Boxes2D",
             "archetypes.Boxes3D",
             "archetypes.Capsules3D",
+            "archetypes.Cylinders3D",
             "archetypes.Ellipsoids3D",
             "archetypes.LineStrips2D",
             "archetypes.LineStrips3D",
@@ -252,6 +262,11 @@ SECTION_TABLE: Final[list[Section]] = [
         ],
         gen_page=False,
     ),
+    # Section(
+    #     title="Deprecated",
+    #     class_list=[],
+    #     gen_page=False,
+    # ),
     ################################################################################
     # Other referenced things
     Section(
@@ -340,7 +355,6 @@ SECTION_TABLE: Final[list[Section]] = [
             "Schema",
             "AnyColumn",
             "AnyComponentColumn",
-            "ComponentLike",
             "ViewContentsLike",
         ],
         show_tables=True,
@@ -371,7 +385,7 @@ SECTION_TABLE: Final[list[Section]] = [
             "thread_local_stream",
             "recording_stream_generator_ctx",
         ],
-        class_list=["RecordingStream", "LoggingHandler", "MemoryRecording"],
+        class_list=["LoggingHandler", "MemoryRecording", "GrpcSink", "FileSink"],
     ),
     Section(
         title="Utilities",
@@ -441,6 +455,8 @@ with mkdocs_gen_files.open(index_path, "w") as index_file:
     index_file.write(
         """
 ## Getting Started
+Rerun needs at least Python 3.9 to run.
+
 * [Quick start](https://www.rerun.io/docs/getting-started/quick-start/python)
 * [Tutorial](https://www.rerun.io/docs/getting-started/data-in/python)
 * [Examples on GitHub](https://github.com/rerun-io/rerun/tree/latest/examples/python)
@@ -454,7 +470,7 @@ Checkout [SDK Operating Modes](https://www.rerun.io/docs/reference/sdk/operating
 overview of what's possible and how.
 
 ## APIs
-"""
+""",
     )
 
     for section in SECTION_TABLE:
@@ -534,7 +550,7 @@ and/or `rerun` process to get some verbose logging output.
 
 If you run into any issues don't hesitate to [open a ticket](https://github.com/rerun-io/rerun/issues/new/choose)
 or [join our Discord](https://discord.gg/Gcm8BbTaAj).
-"""
+""",
     )
 
 # Generate the SUMMARY.txt file

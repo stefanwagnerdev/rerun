@@ -8,7 +8,6 @@ from __future__ import annotations
 from .. import datatypes
 from .._baseclasses import (
     ComponentBatchMixin,
-    ComponentDescriptor,
     ComponentMixin,
 )
 
@@ -22,11 +21,10 @@ class Name(datatypes.Utf8, ComponentMixin):
     # You can define your own __init__ function as a member of NameExt in name_ext.py
 
     # Note: there are no fields here because Name delegates to datatypes.Utf8
-    pass
 
 
 class NameBatch(datatypes.Utf8Batch, ComponentBatchMixin):
-    _COMPONENT_DESCRIPTOR: ComponentDescriptor = ComponentDescriptor("rerun.components.Name")
+    _COMPONENT_TYPE: str = "rerun.components.Name"
 
 
 # This is patched in late to avoid circular dependencies.

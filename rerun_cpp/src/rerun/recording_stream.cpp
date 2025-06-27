@@ -1,14 +1,17 @@
 #include "recording_stream.hpp"
+#include "archetypes.hpp"
 #include "c/rerun.h"
 #include "component_batch.hpp"
 #include "config.hpp"
+#include "log_sink.hpp"
 #include "sdk_info.hpp"
 #include "string_utils.hpp"
 
 #include <arrow/buffer.h>
+#include <sys/types.h>
 
 #include <cassert>
-#include <string> // to_string
+#include <sstream>
 #include <vector>
 
 namespace rerun {
@@ -104,26 +107,16 @@ namespace rerun {
         }
     }
 
-    RR_PUSH_WARNINGS
-
-    RR_DISABLE_DEPRECATION_WARNING
-    Error RecordingStream::connect(std::string_view tcp_addr, float flush_timeout_sec) const {
-        return RecordingStream::connect_tcp(tcp_addr, flush_timeout_sec);
-    }
-
-    RR_POP_WARNINGS
-
-    Error RecordingStream::connect_tcp(std::string_view tcp_addr, float flush_timeout_sec) const {
+    Error RecordingStream::try_set_sinks(const LogSink* sinks, uint32_t num_sinks) const {
         rr_error status = {};
-        RR_PUSH_WARNINGS
-        RR_DISABLE_DEPRECATION_WARNING
-        rr_recording_stream_connect(
-            _id,
-            detail::to_rr_string(tcp_addr),
-            flush_timeout_sec,
-            &status
-        );
-        RR_POP_WARNINGS
+
+        std::vector<rr_log_sink> c_sinks;
+        c_sinks.reserve(num_sinks);
+        for (uint32_t i = 0; i < num_sinks; i++) {
+            c_sinks.push_back(detail::to_rr_log_sink(sinks[i]));
+        }
+        rr_recording_stream_set_sinks(_id, c_sinks.data(), num_sinks, &status);
+
         return status;
     }
 
@@ -136,6 +129,25 @@ namespace rerun {
             &status
         );
         return status;
+    }
+
+    Result<std::string> RecordingStream::serve_grpc(
+        std::string_view bind_ip, uint16_t port, std::string_view server_memory_limit
+    ) const {
+        rr_error status = {};
+        rr_recording_stream_serve_grpc(
+            _id,
+            detail::to_rr_string(bind_ip),
+            port,
+            detail::to_rr_string(server_memory_limit),
+            &status
+        );
+        RR_RETURN_NOT_OK(status);
+
+        // Constructing the string from scratch is easier than passing it via the C FFI:
+        std::stringstream ss;
+        ss << "rerun+http://" << bind_ip << ":" << port << "/proxy";
+        return ss.str();
     }
 
     Error RecordingStream::spawn(const SpawnOptions& options, float flush_timeout_sec) const {
@@ -167,39 +179,42 @@ namespace rerun {
         if (!is_enabled()) {
             return;
         }
-        rr_error status = {};
-        rr_recording_stream_set_time_sequence(
+        rr_error error = {};
+        rr_recording_stream_set_time(
             _id,
             detail::to_rr_string(timeline_name),
+            RR_TIME_TYPE_SEQUENCE,
             sequence_nr,
-            &status
+            &error
         );
-        Error(status).handle(); // Too unlikely to fail to make it worth forwarding.
+        Error(error).handle(); // Too unlikely to fail to make it worth forwarding.
     }
 
-    void RecordingStream::set_time_seconds(std::string_view timeline_name, double seconds) const {
-        if (!is_enabled()) {
-            return;
-        }
-        rr_error status = {};
-        rr_recording_stream_set_time_seconds(
+    void RecordingStream::set_time_duration_nanos(std::string_view timeline_name, int64_t nanos)
+        const {
+        rr_error error = {};
+        rr_recording_stream_set_time(
             _id,
             detail::to_rr_string(timeline_name),
-            seconds,
-            &status
-        );
-        Error(status).handle(); // Too unlikely to fail to make it worth forwarding.
-    }
-
-    void RecordingStream::set_time_nanos(std::string_view timeline_name, int64_t nanos) const {
-        rr_error status = {};
-        rr_recording_stream_set_time_nanos(
-            _id,
-            detail::to_rr_string(timeline_name),
+            RR_TIME_TYPE_DURATION,
             nanos,
-            &status
+            &error
         );
-        Error(status).handle(); // Too unlikely to fail to make it worth forwarding.
+        Error(error).handle(); // Too unlikely to fail to make it worth forwarding.
+    }
+
+    void RecordingStream::set_time_timestamp_nanos_since_epoch(
+        std::string_view timeline_name, int64_t nanos
+    ) const {
+        rr_error error = {};
+        rr_recording_stream_set_time(
+            _id,
+            detail::to_rr_string(timeline_name),
+            RR_TIME_TYPE_TIMESTAMP,
+            nanos,
+            &error
+        );
+        Error(error).handle(); // Too unlikely to fail to make it worth forwarding.
     }
 
     void RecordingStream::disable_timeline(std::string_view timeline_name) const {
@@ -336,4 +351,21 @@ namespace rerun {
         return status;
     }
 
+    Error RecordingStream::try_send_recording_name(std::string_view name) const {
+        rr_error status = {};
+        log_static(
+            this->RECORDING_PROPERTIES_ENTITY_PATH,
+            rerun::archetypes::RecordingProperties::update_fields().with_name(name.data())
+        );
+        return status;
+    }
+
+    Error RecordingStream::try_send_recording_start_time_nanos(int64_t nanos) const {
+        rr_error status = {};
+        log_static(
+            this->RECORDING_PROPERTIES_ENTITY_PATH,
+            rerun::archetypes::RecordingProperties::update_fields().with_start_time(nanos)
+        );
+        return status;
+    }
 } // namespace rerun

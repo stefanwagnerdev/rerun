@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PYTHON_VERSION: "3.8"
+  PYTHON_VERSION: "3.9"
   # web_sys_unstable_apis is required to enable the web_sys clipboard API which egui_web uses
   # https://rustwasm.github.io/wasm-bindgen/api/web_sys/struct.Clipboard.html
   # https://rustwasm.github.io/docs/wasm-bindgen/web-sys/unstable-apis.html
@@ -60,12 +60,15 @@ jobs:
           workload_identity_provider: ${{ secrets.GOOGLE_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
 
-      - uses: prefix-dev/setup-pixi@v0.8.1
+      - uses: prefix-dev/setup-pixi@v0.8.8
         with:
-          pixi-version: v0.39.0
+          pixi-version: v0.41.4
 
       - name: Codegen check
         run: pixi run codegen --force --check
+
+      - name: Codegen out-of-sync (protos)
+        run: pixi run codegen-protos-check
 
   # ---------------------------------------------------------------------------
 
@@ -84,14 +87,14 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || '' }}
 
-      - uses: prefix-dev/setup-pixi@v0.8.1
+      - uses: prefix-dev/setup-pixi@v0.8.8
         with:
-          pixi-version: v0.39.0
+          pixi-version: v0.41.4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.8"
+          python-version: "3.11"
 
       - name: Rerun lints
         run: pixi run lint-rerun
@@ -104,9 +107,9 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || '' }}
 
-      - uses: prefix-dev/setup-pixi@v0.8.1
+      - uses: prefix-dev/setup-pixi@v0.8.8
         with:
-          pixi-version: v0.39.0
+          pixi-version: v0.41.4
 
       - name: Toml format check
         run: pixi run toml-fmt-check
@@ -119,12 +122,27 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || '' }}
 
-      - uses: prefix-dev/setup-pixi@v0.8.1
+      - uses: prefix-dev/setup-pixi@v0.8.8
         with:
-          pixi-version: v0.39.0
+          pixi-version: v0.41.4
 
       - name: Check for too large files
         run: pixi run check-large-files
+
+  check-publish-flags:
+    name: Check for wrong publish flags
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || '' }}
+
+      - uses: prefix-dev/setup-pixi@v0.8.8
+        with:
+          pixi-version: v0.41.4
+
+      - name: Check for wrong publish flags
+        run: pixi run check-publish-flags
 
   check-example-thumbnails:
     name: Check Python example thumbnails
@@ -134,9 +152,9 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || '' }}
 
-      - uses: prefix-dev/setup-pixi@v0.8.1
+      - uses: prefix-dev/setup-pixi@v0.8.8
         with:
-          pixi-version: v0.39.0
+          pixi-version: v0.41.4
 
       - name: Check Python example thumbnails
         run: pixi run ./scripts/ci/thumbnails.py check
@@ -149,14 +167,14 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || '' }}
 
-      - uses: prefix-dev/setup-pixi@v0.8.1
+      - uses: prefix-dev/setup-pixi@v0.8.8
         with:
-          pixi-version: v0.39.0
+          pixi-version: v0.41.4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.8"
+          python-version: "3.11"
 
       - name: Check example manifest coverage
         run: pixi run ./scripts/check_example_manifest_coverage.py
@@ -172,14 +190,14 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || '' }}
 
-      - uses: prefix-dev/setup-pixi@v0.8.1
+      - uses: prefix-dev/setup-pixi@v0.8.8
         with:
-          pixi-version: v0.39.0
+          pixi-version: v0.41.4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.8"
+          python-version: "3.11"
 
       - name: Run linter
         run: |
@@ -213,9 +231,9 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || '' }}
 
-      - uses: prefix-dev/setup-pixi@v0.8.1
+      - uses: prefix-dev/setup-pixi@v0.8.8
         with:
-          pixi-version: v0.39.0
+          pixi-version: v0.41.4
 
       - name: prettier --check
         run: pixi run misc-fmt-check
@@ -247,6 +265,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Restore lychee cache
+        id: restore-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .lycheecache
+          key: cache-lychee-${{ github.sha }}
+          restore-keys: cache-lychee-
+
       # Check https://github.com/lycheeverse/lychee on how to run locally.
       - name: Link Checker
         id: lychee
@@ -257,7 +283,7 @@ jobs:
           # When given a directory, lychee checks only markdown, html and text files, everything else we have to glob in manually.
           # Pass --verbose, so that all considered links are printed, making it easier to debug.
           args: |
-            --verbose --base . "**/*.md" "**/*.rs" "**/*.toml" "**/*.hpp" "**/*.cpp" "**/CMakeLists.txt" "**/*.py" "**/*.yml"
+            --verbose --cache --max-cache-age 1d . --base . "**/*.md" "**/*.rs" "**/*.toml" "**/*.hpp" "**/*.cpp" "**/CMakeLists.txt" "**/*.py" "**/*.yml"
 
       - name: Warn because of broken links
         if: ${{ steps.lychee.outputs.exit_code != '0' }}

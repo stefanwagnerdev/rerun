@@ -69,7 +69,7 @@ class Points3D(Points3DExt, Archetype):
     radii = [0.05, 0.01, 0.2, 0.1, 0.3]
 
     for i in range(5):
-        rr.set_time_seconds("time", 10 + i)
+        rr.set_time("time", duration=10 + i)
         rr.log("points", rr.Points3D(positions[i], colors=colors[i], radii=radii[i]))
     ```
     <center>
@@ -109,7 +109,7 @@ class Points3D(Points3DExt, Archetype):
 
     rr.send_columns(
         "points",
-        indexes=[rr.TimeSecondsColumn("time", times)],
+        indexes=[rr.TimeColumn("time", duration=times)],
         columns=[
             *rr.Points3D.columns(positions=positions).partition(lengths=[2, 4, 4, 3, 4]),
             *rr.Points3D.columns(colors=colors, radii=radii),
@@ -132,21 +132,21 @@ class Points3D(Points3DExt, Archetype):
 
     rr.init("rerun_example_points3d_partial_updates", spawn=True)
 
-    positions = [[i, 0, 0] for i in range(0, 10)]
+    positions = [[i, 0, 0] for i in range(10)]
 
-    rr.set_time_sequence("frame", 0)
+    rr.set_time("frame", sequence=0)
     rr.log("points", rr.Points3D(positions))
 
-    for i in range(0, 10):
-        colors = [[20, 200, 20] if n < i else [200, 20, 20] for n in range(0, 10)]
-        radii = [0.6 if n < i else 0.2 for n in range(0, 10)]
+    for i in range(10):
+        colors = [[20, 200, 20] if n < i else [200, 20, 20] for n in range(10)]
+        radii = [0.6 if n < i else 0.2 for n in range(10)]
 
         # Update only the colors and radii, leaving everything else as-is.
-        rr.set_time_sequence("frame", i)
+        rr.set_time("frame", sequence=i)
         rr.log("points", rr.Points3D.from_fields(radii=radii, colors=colors))
 
     # Update the positions and radii, and clear everything else in the process.
-    rr.set_time_sequence("frame", 20)
+    rr.set_time("frame", sequence=20)
     rr.log("points", rr.Points3D.from_fields(clear_unset=True, positions=positions, radii=0.3))
     ```
     <center>
@@ -217,7 +217,10 @@ class Points3D(Points3DExt, Archetype):
             If there's a single label present, it will be placed at the center of the entity.
             Otherwise, each instance will have its own label.
         show_labels:
-            Optional choice of whether the text labels should be shown by default.
+            Whether the text labels should be shown.
+
+            If not set, labels will automatically appear when there is exactly one label for this entity
+            or the number of instances on this entity is under a certain threshold.
         class_ids:
             Optional class Ids for the points.
 
@@ -297,7 +300,10 @@ class Points3D(Points3DExt, Archetype):
             If there's a single label present, it will be placed at the center of the entity.
             Otherwise, each instance will have its own label.
         show_labels:
-            Optional choice of whether the text labels should be shown by default.
+            Whether the text labels should be shown.
+
+            If not set, labels will automatically appear when there is exactly one label for this entity
+            or the number of instances on this entity is under a certain threshold.
         class_ids:
             Optional class Ids for the points.
 
@@ -331,26 +337,34 @@ class Points3D(Points3DExt, Archetype):
             return ComponentColumnList([])
 
         kwargs = {
-            "positions": positions,
-            "radii": radii,
-            "colors": colors,
-            "labels": labels,
-            "show_labels": show_labels,
-            "class_ids": class_ids,
-            "keypoint_ids": keypoint_ids,
+            "Points3D:positions": positions,
+            "Points3D:radii": radii,
+            "Points3D:colors": colors,
+            "Points3D:labels": labels,
+            "Points3D:show_labels": show_labels,
+            "Points3D:class_ids": class_ids,
+            "Points3D:keypoint_ids": keypoint_ids,
         }
         columns = []
 
         for batch in batches:
             arrow_array = batch.as_arrow_array()
 
-            # For primitive arrays, we infer partition size from the input shape.
-            if pa.types.is_primitive(arrow_array.type):
-                param = kwargs[batch.component_descriptor().archetype_field_name]  # type: ignore[index]
+            # For primitive arrays and fixed size list arrays, we infer partition size from the input shape.
+            if pa.types.is_primitive(arrow_array.type) or pa.types.is_fixed_size_list(arrow_array.type):
+                param = kwargs[batch.component_descriptor().component]  # type: ignore[index]
                 shape = np.shape(param)  # type: ignore[arg-type]
+                elem_flat_len = int(np.prod(shape[1:])) if len(shape) > 1 else 1  # type: ignore[redundant-expr,misc]
 
-                batch_length = shape[1] if len(shape) > 1 else 1
-                num_rows = shape[0] if len(shape) >= 1 else 1
+                if pa.types.is_fixed_size_list(arrow_array.type) and arrow_array.type.list_size == elem_flat_len:
+                    # If the product of the last dimensions of the shape are equal to the size of the fixed size list array,
+                    # we have `num_rows` single element batches (each element is a fixed sized list).
+                    # (This should have been already validated by conversion to the arrow_array)
+                    batch_length = 1
+                else:
+                    batch_length = shape[1] if len(shape) > 1 else 1  # type: ignore[redundant-expr,misc]
+
+                num_rows = shape[0] if len(shape) >= 1 else 1  # type: ignore[redundant-expr,misc]
                 sizes = batch_length * np.ones(num_rows)
             else:
                 # For non-primitive types, default to partitioning each element separately.
@@ -408,7 +422,10 @@ class Points3D(Points3DExt, Archetype):
         default=None,
         converter=components.ShowLabelsBatch._converter,  # type: ignore[misc]
     )
-    # Optional choice of whether the text labels should be shown by default.
+    # Whether the text labels should be shown.
+    #
+    # If not set, labels will automatically appear when there is exactly one label for this entity
+    # or the number of instances on this entity is under a certain threshold.
     #
     # (Docstring intentionally commented out to hide this field from the docs)
 

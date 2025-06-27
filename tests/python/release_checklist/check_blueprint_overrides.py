@@ -25,14 +25,14 @@ def log_readme() -> None:
 def log_plots() -> None:
     from math import cos, sin, tau
 
-    for t in range(0, int(tau * 2 * 10.0)):
-        rr.set_time_sequence("frame_nr", t)
+    for t in range(int(tau * 2 * 10.0)):
+        rr.set_time("frame_nr", sequence=t)
 
         sin_of_t = sin(float(t) / 10.0)
-        rr.log("plots/sin", rr.Scalar(sin_of_t))
+        rr.log("plots/sin", rr.Scalars(sin_of_t))
 
         cos_of_t = cos(float(t) / 10.0)
-        rr.log("plots/cos", rr.Scalar(cos_of_t))
+        rr.log("plots/cos", rr.Scalars(cos_of_t))
 
 
 def run(args: Namespace) -> None:
@@ -46,17 +46,15 @@ def run(args: Namespace) -> None:
             rrb.TextDocumentView(origin="readme", name="Instructions"),
             rrb.TimeSeriesView(
                 name="Plots",
-                defaults=[rr.components.Color([0, 0, 255])],
+                defaults=[rr.SeriesPoints.from_fields(colors=[0, 0, 255])],
                 overrides={
                     "plots/cos": [
-                        rrb.VisualizerOverrides("SeriesPoint"),
-                        rr.components.Color([0, 255, 0]),
-                        # TODDO(#6670): This should just be `rr.components.MarkerShape.Cross`
-                        rr.components.MarkerShapeBatch("cross"),
+                        rrb.VisualizerOverrides("SeriesPoints"),
+                        rr.SeriesPoints.from_fields(colors=[0, 255, 0], markers="cross"),
                     ],
                 },
             ),
-        )
+        ),
     )
     rr.send_blueprint(blueprint, make_active=True, make_default=True)
 

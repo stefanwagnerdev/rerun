@@ -73,7 +73,10 @@ def shapely_geom_to_numpy(geom: shapely.Geometry) -> list[npt.NDArray[np.float64
 
 
 def log_region_boundaries_for_country(
-    country_code: str, level: int, color: tuple[float, float, float], crs: CRS
+    country_code: str,
+    level: int,
+    color: tuple[float, float, float],
+    crs: CRS,
 ) -> None:
     """Log some boundaries for the given country and level."""
 
@@ -93,7 +96,7 @@ def log_region_boundaries_for_country(
     # cspell:disable-next-line
     map_data = gpd.read_file(MAP_DATA_DIR / f"NUTS_RG_01M_2021_4326_LEVL_{level}.json").set_crs("epsg:4326").to_crs(crs)
 
-    for i, row in map_data[map_data.CNTR_CODE == country_code].iterrows():
+    for _i, row in map_data[map_data.CNTR_CODE == country_code].iterrows():
         entity_path = f"region_boundaries/{country_code}/{level}/{row.NUTS_ID}"
         lines = shapely_geom_to_numpy(row.geometry)
         rr.log(entity_path + "/2D", rr.LineStrips2D(lines, colors=color), static=True)
@@ -218,7 +221,7 @@ class Logger(typing.Protocol):
 class MeasurementLogger:
     """Logger class that uses regular `rr.log` calls."""
 
-    def __init__(self, proj: pyproj.Transformer, raw: bool):
+    def __init__(self, proj: pyproj.Transformer, raw: bool) -> None:
         self._proj = proj
         self._raw = raw
 
@@ -228,7 +231,7 @@ class MeasurementLogger:
         ]
 
     def process_measurement(self, measurement: Measurement) -> None:
-        rr.set_time_seconds("unix_time", measurement.timestamp)
+        rr.set_time("unix_time", timestamp=measurement.timestamp)
 
         if self._raw:
             metadata = dataclasses.asdict(measurement)
@@ -267,8 +270,8 @@ class MeasurementLogger:
         if measurement.barometric_altitude is not None:
             rr.log(
                 entity_path + "/barometric_altitude",
-                rr.Scalar(measurement.barometric_altitude),
-                rr.SeriesLine(color=color),
+                rr.Scalars(measurement.barometric_altitude),
+                rr.SeriesLines(colors=color),
             )
 
     def flush(self) -> None:
@@ -282,7 +285,7 @@ class MeasurementLogger:
 class MeasurementBatchLogger:
     """Logger class that batches measurements and uses `rr.send_columns` calls."""
 
-    def __init__(self, proj: pyproj.Transformer, batch_size: int = 8192):
+    def __init__(self, proj: pyproj.Transformer, batch_size: int = 8192) -> None:
         self._proj = proj
         self._batch_size = batch_size
         self._measurements: list[Measurement] = []
@@ -323,10 +326,10 @@ class MeasurementBatchLogger:
                 # rr.GeoPoints.from_fields(colors=color),
                 static=True,
             )
-            rr.log(entity_path + "/barometric_altitude", rr.SeriesLine.from_fields(color=color), static=True)
+            rr.log(entity_path + "/barometric_altitude", rr.SeriesLines.from_fields(colors=color), static=True)
             self._position_indicators.add(icao_id)
 
-        timestamps = rr.TimeSecondsColumn("unix_time", df["timestamp"].to_numpy())
+        timestamps = rr.TimeColumn("unix_time", timestamp=df["timestamp"].to_numpy())
         pos = self._proj.transform(df["longitude"], df["latitude"], df["barometric_altitude"])
 
         raw_coordinates = rr.AnyValues(
@@ -348,14 +351,14 @@ class MeasurementBatchLogger:
         rr.send_columns(
             entity_path + "/barometric_altitude",
             [timestamps],
-            rr.Scalar.columns(scalar=df["barometric_altitude"].to_numpy()),
+            rr.Scalars.columns(scalars=df["barometric_altitude"].to_numpy()),
         )
 
     def log_ground_status(self, df: polars.DataFrame, icao_id: str) -> None:
         entity_path = f"aircraft/{icao_id}"
         df = df["timestamp", "ground_status"].drop_nulls()
 
-        timestamps = rr.TimeSecondsColumn("unix_time", df["timestamp"].to_numpy())
+        timestamps = rr.TimeColumn("unix_time", timestamp=df["timestamp"].to_numpy())
         columns = rr.AnyValues.columns(ground_status=df["ground_status"].to_numpy())
 
         rr.send_columns(entity_path, [timestamps], columns)
@@ -372,7 +375,7 @@ class MeasurementBatchLogger:
 
         rr.send_columns(
             entity_path,
-            [rr.TimeSecondsColumn("unix_time", df["timestamp"].to_numpy())],
+            [rr.TimeColumn("unix_time", timestamp=df["timestamp"].to_numpy())],
             metadata,
         )
 
@@ -386,7 +389,6 @@ def log_everything(paths: list[Path], raw: bool, batch: bool, batch_size: int) -
 
     proj = Transformer.from_crs("EPSG:4326", utm_crs, always_xy=True)
 
-    rr.set_time_seconds("unix_time", 0)
     for country_code, (level, color) in itertools.product(["DE", "CH"], [(0, (1, 0.5, 0.5))]):
         log_region_boundaries_for_country(country_code, level, color, utm_crs)
 

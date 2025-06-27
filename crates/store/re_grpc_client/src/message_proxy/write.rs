@@ -4,8 +4,9 @@ use std::time::Duration;
 
 use re_log_encoding::Compression;
 use re_log_types::LogMsg;
-use re_protos::sdk_comms::v0::message_proxy_client::MessageProxyClient;
-use re_uri::ProxyEndpoint;
+use re_protos::sdk_comms::v1alpha1::WriteMessagesRequest;
+use re_protos::sdk_comms::v1alpha1::message_proxy_service_client::MessageProxyServiceClient;
+use re_uri::ProxyUri;
 use tokio::runtime;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
@@ -35,6 +36,7 @@ impl Default for Options {
     }
 }
 
+/// This is the gRPC client used for the SDK-side log-sink.
 pub struct Client {
     thread: Option<JoinHandle<()>>,
     cmd_tx: UnboundedSender<Cmd>,
@@ -44,7 +46,7 @@ pub struct Client {
 
 impl Client {
     #[expect(clippy::needless_pass_by_value)]
-    pub fn new(endpoint: ProxyEndpoint, options: Options) -> Self {
+    pub fn new(uri: ProxyUri, options: Options) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
 
@@ -57,7 +59,7 @@ impl Client {
                     .build()
                     .expect("Failed to build tokio runtime")
                     .block_on(message_proxy_client(
-                        endpoint,
+                        uri,
                         cmd_rx,
                         shutdown_rx,
                         options.compression,
@@ -87,26 +89,27 @@ impl Client {
         };
 
         let start = std::time::Instant::now();
+
         loop {
             match rx.try_recv() {
                 Ok(_) => {
-                    re_log::debug!("Flush complete");
+                    re_log::trace!("Flush complete");
                     break;
                 }
                 Err(TryRecvError::Empty) => {
-                    let Some(timeout) = self.flush_timeout else {
-                        std::thread::yield_now();
-                        continue;
-                    };
-
-                    let elapsed = start.elapsed();
-                    if elapsed >= timeout {
-                        re_log::debug!("Flush timed out, not all messages were sent");
-                        break;
+                    if let Some(timeout) = self.flush_timeout {
+                        let elapsed = start.elapsed();
+                        if elapsed >= timeout {
+                            re_log::warn!(
+                                "Flush timed out, not all messages were sent. The timeout can be adjusted when connecting via gRPC."
+                            );
+                            break;
+                        }
                     }
+                    std::thread::yield_now();
                 }
                 Err(TryRecvError::Closed) => {
-                    re_log::debug!("Flush failed, not all messages were sent");
+                    re_log::warn!("Flush failed, not all messages were sent");
                     break;
                 }
             }
@@ -122,7 +125,7 @@ impl Drop for Client {
 
         // Quit immediately - no more messages left in the queue
         if let Err(err) = self.shutdown_tx.try_send(()) {
-            re_log::error!("failed to gracefully shut down message proxy client: {err}");
+            re_log::error!("Failed to gracefully shut down message proxy client: {err}");
             return;
         };
 
@@ -136,12 +139,12 @@ impl Drop for Client {
 }
 
 async fn message_proxy_client(
-    endpoint: ProxyEndpoint,
+    uri: ProxyUri,
     mut cmd_rx: UnboundedReceiver<Cmd>,
     mut shutdown_rx: Receiver<()>,
     compression: Compression,
 ) {
-    let endpoint = match Endpoint::from_shared(endpoint.origin.as_url()) {
+    let endpoint = match Endpoint::from_shared(uri.origin.as_url()) {
         Ok(endpoint) => endpoint,
         Err(err) => {
             re_log::error!("Invalid message proxy server endpoint: {err}");
@@ -166,20 +169,31 @@ async fn message_proxy_client(
             }
         }
     };
-    let mut client = MessageProxyClient::new(channel);
+    let mut client = MessageProxyServiceClient::new(channel)
+        .max_decoding_message_size(crate::MAX_DECODING_MESSAGE_SIZE);
 
     let stream = async_stream::stream! {
         loop {
             tokio::select! {
                 cmd = cmd_rx.recv() => {
                     match cmd {
-                        Some(Cmd::LogMsg(msg)) => {
-                            let msg = match re_log_encoding::protobuf_conversions::log_msg_to_proto(msg, compression) {
+                        Some(Cmd::LogMsg(mut log_msg)) => {
+                            // Insert the timestamp metadata into the Arrow message for accurate e2e latency measurements:
+                             log_msg.insert_arrow_record_batch_metadata(
+                                re_sorbet::timestamp_metadata::KEY_TIMESTAMP_SDK_IPC_ENCODE.to_owned(),
+                                re_sorbet::timestamp_metadata::now_timestamp(),
+                            );
+
+                            let msg = match re_log_encoding::protobuf_conversions::log_msg_to_proto(log_msg, compression) {
                                 Ok(msg) => msg,
                                 Err(err) => {
                                     re_log::error!("Failed to encode message: {err}");
                                     break;
                                 }
+                            };
+
+                            let msg = WriteMessagesRequest {
+                                log_msg: Some(msg),
                             };
 
                             yield msg;

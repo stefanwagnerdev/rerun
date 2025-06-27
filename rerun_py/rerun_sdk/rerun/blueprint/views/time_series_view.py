@@ -3,13 +3,17 @@
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from collections.abc import Iterable, Mapping, Sequence
+
+from ..._baseclasses import (
+    DescribedComponentBatch,
+)
 
 __all__ = ["TimeSeriesView"]
 
 
 from ... import datatypes
-from ..._baseclasses import AsComponents, ComponentBatchLike
+from ..._baseclasses import AsComponents
 from ...datatypes import EntityPathLike, Utf8Like
 from .. import archetypes as blueprint_archetypes, components as blueprint_components
 from ..api import View, ViewContentsLike
@@ -17,7 +21,9 @@ from ..api import View, ViewContentsLike
 
 class TimeSeriesView(View):
     """
-    **View**: A time series view for scalars over time, for use with [`archetypes.Scalar`][rerun.archetypes.Scalar].
+    **View**: A time series view for scalars over time, for use with [`archetypes.Scalars`][rerun.archetypes.Scalars].
+
+    ⚠️ **This type is _unstable_ and may change significantly in a way that the data won't be backwards compatible.**
 
     Example
     -------
@@ -31,15 +37,15 @@ class TimeSeriesView(View):
     rr.init("rerun_example_timeseries", spawn=True)
 
     # Log some trigonometric functions
-    rr.log("trig/sin", rr.SeriesLine(color=[255, 0, 0], name="sin(0.01t)"), static=True)
-    rr.log("trig/cos", rr.SeriesLine(color=[0, 255, 0], name="cos(0.01t)"), static=True)
-    rr.log("trig/cos", rr.SeriesLine(color=[0, 0, 255], name="cos(0.01t) scaled"), static=True)
-    for t in range(0, int(math.pi * 4 * 100.0)):
-        rr.set_time_sequence("timeline0", t)
-        rr.set_time_seconds("timeline1", t)
-        rr.log("trig/sin", rr.Scalar(math.sin(float(t) / 100.0)))
-        rr.log("trig/cos", rr.Scalar(math.cos(float(t) / 100.0)))
-        rr.log("trig/cos_scaled", rr.Scalar(math.cos(float(t) / 100.0) * 2.0))
+    rr.log("trig/sin", rr.SeriesLines(colors=[255, 0, 0], names="sin(0.01t)"), static=True)
+    rr.log("trig/cos", rr.SeriesLines(colors=[0, 255, 0], names="cos(0.01t)"), static=True)
+    rr.log("trig/cos_scaled", rr.SeriesLines(colors=[0, 0, 255], names="cos(0.01t) scaled"), static=True)
+    for t in range(int(math.pi * 4 * 100.0)):
+        rr.set_time("timeline0", sequence=t)
+        rr.set_time("timeline1", duration=t)
+        rr.log("trig/sin", rr.Scalars(math.sin(float(t) / 100.0)))
+        rr.log("trig/cos", rr.Scalars(math.cos(float(t) / 100.0)))
+        rr.log("trig/cos_scaled", rr.Scalars(math.cos(float(t) / 100.0) * 2.0))
 
     # Create a TimeSeries View
     blueprint = rrb.Blueprint(
@@ -89,8 +95,13 @@ class TimeSeriesView(View):
         contents: ViewContentsLike = "$origin/**",
         name: Utf8Like | None = None,
         visible: datatypes.BoolLike | None = None,
-        defaults: list[Union[AsComponents, ComponentBatchLike]] = [],
-        overrides: dict[EntityPathLike, list[ComponentBatchLike]] = {},
+        defaults: Iterable[AsComponents | Iterable[DescribedComponentBatch]] | None = None,
+        overrides: Mapping[
+            EntityPathLike,
+            AsComponents | Iterable[DescribedComponentBatch | AsComponents | Iterable[DescribedComponentBatch]],
+        ]
+        | None = None,
+        axis_x: blueprint_archetypes.TimeAxis | None = None,
         axis_y: blueprint_archetypes.ScalarAxis | None = None,
         plot_legend: blueprint_archetypes.PlotLegend | blueprint_components.Corner2D | None = None,
         time_ranges: blueprint_archetypes.VisibleTimeRanges
@@ -117,16 +128,24 @@ class TimeSeriesView(View):
 
             Defaults to true if not specified.
         defaults:
-            List of default components or component batches to add to the view. When an archetype
-            in the view is missing a component included in this set, the value of default will be used
-            instead of the normal fallback for the visualizer.
+            List of archetypes or (described) component batches to add to the view.
+            When an archetype in the view is missing a component included in this set,
+            the value of default will be used instead of the normal fallback for the visualizer.
+
+            Note that an archetype's required components typically don't have any effect.
+            It is recommended to use the archetype's `from_fields` method instead and only specify the fields that you need.
         overrides:
             Dictionary of overrides to apply to the view. The key is the path to the entity where the override
-            should be applied. The value is a list of component or component batches to apply to the entity.
+            should be applied. The value is a list of archetypes or (described) component batches to apply to the entity.
+
+            It is recommended to use the archetype's `from_fields` method instead and only specify the fields that you need.
 
             Important note: the path must be a fully qualified entity path starting at the root. The override paths
             do not yet support `$origin` relative paths or glob expressions.
             This will be addressed in <https://github.com/rerun-io/rerun/issues/6673>.
+
+        axis_x:
+            Configures the horizontal axis of the plot.
         axis_y:
             Configures the vertical axis of the plot.
         plot_legend:
@@ -140,6 +159,11 @@ class TimeSeriesView(View):
         """
 
         properties: dict[str, AsComponents] = {}
+        if axis_x is not None:
+            if not isinstance(axis_x, blueprint_archetypes.TimeAxis):
+                axis_x = blueprint_archetypes.TimeAxis(axis_x)
+            properties["TimeAxis"] = axis_x
+
         if axis_y is not None:
             if not isinstance(axis_y, blueprint_archetypes.ScalarAxis):
                 axis_y = blueprint_archetypes.ScalarAxis(axis_y)
